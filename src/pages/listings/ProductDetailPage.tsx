@@ -1,13 +1,14 @@
 import React, { useState } from "react"
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { MapPin, MessageSquare, Pencil, ShoppingBag, Star, Trash2 } from "lucide-react"
+import { MapPin, MessageSquare, Pencil, ShoppingBag, Trash2 } from "lucide-react"
 import { Button } from "../../components/ui/Button"
 import { Badge } from "../../components/ui/Badge"
 import { Avatar } from "../../components/ui/Avatar"
 import { Spinner } from "../../components/ui/Spinner"
 import { EmptyState } from "../../components/ui/EmptyState"
 import { DeleteListingModal } from "../../components/listings/DeleteListingModal"
+import { RatingSummary } from "../../components/profiles/RatingSummary"
 import { useToast } from "../../components/ui/Toast"
 import { useAuth } from "../../context/AuthContext"
 import { fetchListingById, getListingImagePublicUrl } from "../../lib/queries/listings"
@@ -176,10 +177,7 @@ export const ProductDetailPage: React.FC = () => {
                 <div className="font-bold text-text group-hover:text-primary transition-colors">
                   {listing.profiles.display_name}
                 </div>
-                <div className="text-xs text-text-muted flex items-center gap-1">
-                  <Star className="w-3.5 h-3.5 fill-current text-primary" />
-                  {listing.profiles.avg_rating.toFixed(1)} ({listing.profiles.review_count} reviews)
-                </div>
+                <RatingSummary avgRating={listing.profiles.avg_rating} reviewCount={listing.profiles.review_count} />
               </div>
             </Link>
 

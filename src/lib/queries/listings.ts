@@ -111,6 +111,24 @@ export async function fetchListingsBySeller(sellerId: string): Promise<QueryResu
   return { data: data as ListingWithImages[] | null, error: error?.message ?? null }
 }
 
+/**
+ * A seller's *active* listings only — for the public profile view, where
+ * sold/removed listings shouldn't clutter what a visitor sees (the seller
+ * dashboard's "My Listings" tab is where the seller sees every status).
+ */
+export async function fetchActiveListingsBySeller(
+  sellerId: string
+): Promise<QueryResult<ListingWithImages[]>> {
+  const { data, error } = await supabase
+    .from("listings")
+    .select("*, listing_images(*)")
+    .eq("seller_id", sellerId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+
+  return { data: data as ListingWithImages[] | null, error: error?.message ?? null }
+}
+
 export async function fetchListingsByCategory(
   categoryId: string
 ): Promise<QueryResult<ListingWithImages[]>> {

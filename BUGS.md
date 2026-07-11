@@ -442,7 +442,7 @@ confirmed 2026-07-11)
 
 ---
 
-## 13. `reviews` UPDATE policy has the same tautological `with check` as issue #10 — found, not fixed
+## 13. `reviews` UPDATE policy has the same tautological `with check` as issue #10
 
 **Symptoms**
 No runtime error — found by code review while reading migration 010 for
@@ -462,29 +462,43 @@ buyer editing their own review could, in principle, also reassign it to a
 different seller or claim a different reviewer.
 
 **Resolution**
-None yet. Deliberately deferred — Prompt 6's scope was the order flow and
-"unlocks the review action" (insert only); no review-editing UI exists to
-exercise this path yet. Documented here so it isn't lost, and flagged in
-AI_HANDOFF.md's Known Assumptions.
-
-**How to avoid in future**
-Fix before building any review-editing UI, using the same subquery idiom
+Fixed in `supabase/migrations/018_fix_reviews_update_policy.sql` as part of
+Prompt 9 (Profiles and reviews), which needed to ship a real "edit your
+review" UI and so could no longer defer this. Uses the same subquery idiom
 as issues #10/#11/#12:
 ```sql
 with check (
   reviewer_id = auth.uid()
   and reviewer_id = (select r.reviewer_id from public.reviews r where r.id = reviews.id)
   and seller_id = (select r.seller_id from public.reviews r where r.id = reviews.id)
+  and order_id = (select r.order_id from public.reviews r where r.id = reviews.id)
 )
 ```
-More generally: now that this exact tautology pattern has appeared twice
-in this codebase (migrations 007 and 010, both apparently written in the
-same original pass), it's worth grepping the whole `supabase/migrations/`
-directory for self-comparison expressions whenever auditing RLS, rather
-than waiting to trip over each one individually while building the
-feature that happens to touch it.
+While fixing this, also froze `order_id`, which the original policy never
+constrained at all — a gap beyond what was originally documented above.
+Without it, a buyer could "move" their review onto a different order
+(`order_id` has a unique constraint, so this would only succeed against an
+order that doesn't already have a review, but it's still a real integrity
+gap: a review is supposed to be permanently tied to the order it was
+written for). `rating` and `comment` are deliberately left unconstrained —
+those are exactly the columns a legitimate edit changes.
 
-**Status:** Open — found, not fixed, not yet needed by any built feature
+**How to avoid in future**
+Now that this exact tautology pattern has appeared twice in this codebase
+(migrations 007 and 010, both apparently written in the same original
+pass), it's worth grepping the whole `supabase/migrations/` directory for
+self-comparison expressions whenever auditing RLS, rather than waiting to
+trip over each one individually while building the feature that happens to
+touch it. Also: when fixing a `with check` tautology, don't just fix the
+columns the original bug report named — re-derive which columns on that
+row *should* be immutable from scratch (here, `order_id` was an omission
+in the original policy, not a tautology, and would have been missed by
+only patching the two known-tautological clauses).
+
+**Status:** Resolved in code (migration 018 written, next sequential
+number after 017). **Not yet applied to the live Supabase project** — run
+it via the SQL Editor (same process as migrations 013/014/017) before the
+review-editing UI is used against production data.
 
 ---
 

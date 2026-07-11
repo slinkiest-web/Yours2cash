@@ -725,6 +725,91 @@ features built at different times. No other hand-written type in
 to audit today — but see the new Architectural decisions entry below for
 what to check before adding the next one.
 
+### Prompt 9 — Profiles and reviews (2026-07-11)
+
+Closed the remaining PRD §7.11/§7.12 gaps: real public profiles, the
+own-profile purchase/sales/review history sections, review editing, and a
+consistent seller-rating display everywhere it appears.
+
+**Migration**: `018_fix_reviews_update_policy.sql` fixes BUGS.md #13 (the
+tautological `reviews` UPDATE `with check`, same idiom as migrations
+013/014/017) and additionally freezes `order_id`, which the original
+policy never constrained at all — full reasoning in BUGS.md #13. Not yet
+run against the live project; needs the same SQL Editor walkthrough as
+prior migrations before review editing is used against production data.
+
+**New pure module**: `src/lib/reviewRules.ts` — `canLeaveReview` and
+`canEditReview`, mirroring the "one review per order" invariant (enforced
+at the DB level by a unique constraint on `reviews.order_id`) the same way
+`orderStateMachine.ts` mirrors the orders trigger. 12 tests in
+`src/lib/__tests__/reviewRules.test.ts` cover both functions across every
+role/status/existing-review combination, including the core "second
+review is blocked" case the user explicitly asked to be tested.
+
+**New shared components** (all under `src/components/reviews/` and
+`src/components/profiles/`, extracted because a second real call site
+existed for each — same bar as `ListingCard`/`ListingBrowser` in Prompt 4):
+- `StarRating.tsx` — read-only stars, `role="img"` with a full text
+  `aria-label` (e.g. "4 out of 5 stars"). Used on the tracking page's "Your
+  review" card and every `ReviewListItem`.
+- `StarRatingInput.tsx` — the accessible interactive picker the user
+  explicitly required: native `<button>`s (keyboard-operable via Tab +
+  Enter/Space with zero custom key handling), `role="group"` labelled via
+  `useId()`, per-star `aria-label`/`aria-pressed` (selection state isn't
+  color-only), and a visible **and** screen-reader-readable text
+  equivalent ("3 out of 5" / "Not rated") next to the stars. 8 tests in
+  `StarRatingInput.test.tsx`, including real keyboard-interaction tests
+  (`userEvent.tab()` + `{Enter}`/`{Space}`), not just click simulation.
+- `ReviewModal.tsx` — extracted from an inline sub-component that used to
+  live inside `OrderTrackingPage.tsx`, and extended with an optional
+  `existingReview` prop so the same modal handles both create (`createReview`)
+  and edit (`updateReview`) by branching on whether it was passed.
+- `ReviewListItem.tsx` — reviewer avatar/name/date/stars/comment card, used
+  by both `PublicProfilePage` and the new `ReviewsReceivedSection`.
+- `RatingSummary.tsx` — the avg-rating + review-count readout, now the
+  single source of that markup wherever it's needed (`ProductDetailPage`'s
+  seller card and `PublicProfilePage`'s header) so it renders identically
+  everywhere, per the user's explicit "shows consistently across cards,
+  product detail, and profiles" requirement. `ListingCard` doesn't render
+  seller info, so it had no pre-existing duplicate to replace.
+
+**New page**: `src/pages/profile/PublicProfilePage.tsx` replaces the
+hardcoded placeholder that used to live in `Placeholders.tsx`. Fetches
+profile (`fetchProfile`), active-only listings (new
+`fetchActiveListingsBySeller` query function — active only, unlike the
+seller's own dashboard which needs every status), and reviews
+(`fetchReviewsForSeller`) as three independent `useQuery` calls. Renders
+display name, avatar, state/city, `RatingSummary`, bio, an active-listings
+grid, and a reviews list — structurally cannot expose email, since
+`profiles` has no email column to begin with.
+
+**Own profile additions**: three new sections render below the existing
+edit form in `ProfilePage.tsx` (only once profile setup is already
+complete, matching the page's existing `isSetupFlow` gate) —
+`PurchaseHistorySection` (buyer orders, `fetchBuyerOrders`, query key
+`["orders", "buyer", userId]` — same key `OrdersPage` already uses, so the
+cache is shared), `SalesHistorySection` (mirror, `fetchSellerOrders`, key
+`["orders", "seller", userId]` matching `MyOrdersTab`/`EarningsTab`), and
+`ReviewsReceivedSection` (`fetchReviewsForSeller`, read-only — no edit
+affordance, since the PRD is explicit that sellers cannot alter reviews
+they receive). Each order card links to `/orders/:id`. All three take
+`userId` as a prop rather than calling `useAuth()` internally, since
+`ProfilePage` already has it.
+
+**OrderTrackingPage**: now imports the extracted `ReviewModal`/`StarRating`
+instead of its old inline copies, and the old inline `canReview` boolean
+was replaced with `canLeaveReview`/`canEditReview` from `reviewRules.ts`.
+Added an "Edit" button on the existing "Your review" card, wired to open
+the same `ReviewModal` with `existingReview` set, which switches it into
+edit mode.
+
+**Verified**: `tsc -b --force` clean, `vitest run` — **93/93 pass** (13
+files; 20 new tests across `reviewRules.test.ts` and
+`StarRatingInput.test.tsx`, no regressions in the other 11 files including
+`OrderTrackingPage.test.tsx`), `oxlint` clean (same 3 pre-existing warnings
+in untouched files, no new ones), `npm run build` clean. Not yet
+click-tested live by Builder — migration 018 needs to be run first.
+
 ---
 
 ## Architectural decisions
@@ -859,6 +944,15 @@ what to check before adding the next one.
   (`grep -rn "listings!" src/lib/queries/` to find every current embed
   site), default it to nullable and add fallback UI at every call site up
   front — don't wait for a third feature to hit this the hard way.
+- **The "pure module mirrors a DB invariant" pattern extends past state
+  machines.** `reviewRules.ts` (Prompt 9) applies the same shape
+  `orderStateMachine.ts` established to a different kind of invariant — not
+  a trigger-enforced transition table, but a unique-constraint-backed "one
+  review per order" rule. Whenever a UI needs to gate an action based on a
+  rule the database also enforces (a trigger, a unique constraint, an RLS
+  check), write it once as a pure, tested function and call it from the
+  component, rather than re-deriving the condition inline as a one-off
+  boolean.
 
 ---
 
@@ -876,8 +970,8 @@ what to check before adding the next one.
 | 7.8 | Orders (mock flow) | ✅ Done (Prompt 6 buyer side + Prompt 7 seller side) — create with price snapshot, cancel while pending, duplicate-open-order prevention, and now seller-side confirm/ship/deliver from the dashboard. Migrations applied and confirmed 2026-07-11 |
 | 7.9 | Order tracking | ✅ Done (Prompt 6) — status timeline from `order_events`, listing snapshot, other party, cancelled renders distinctly |
 | 7.10 | Seller dashboard | ✅ Done (Prompt 7, 2026-07-12) — My Listings (status, edit, delete, create entry point), My Orders (advance controls), Earnings (total/count/recent sales, informational banner) |
-| 7.11 | User profile | ✅ Own profile done and verified live (Prompt 3); public profile view (`/profile/:id`) still placeholder, does not yet show the seller's real listings or reviews |
-| 7.12 | Ratings and reviews | 🟡 Partial (Prompt 6) — buyer can leave a rating + comment once an order is delivered ("unlocks the review action" per PRD §7.8). No review editing UI, and reviews aren't displayed anywhere yet (seller's public profile, etc.) — that's the rest of this PRD section, still future work |
+| 7.11 | User profile | ✅ Done (Prompt 9) — own profile (Prompt 3) now also shows purchase history, sales history, and reviews received; public profile view (`/profile/:id`) is real (avatar, location, rating, active listings, reviews — no email) |
+| 7.12 | Ratings and reviews | ✅ Done (Prompt 9) — buyer can leave a 1–5 star rating + optional comment once delivered, one per order (DB unique constraint + client-mirrored `reviewRules.ts`), and can edit their own review; sellers cannot alter reviews they receive; reviews render on the seller's public profile and own-profile "Reviews Received"; avg rating shown consistently via a shared `RatingSummary` component |
 
 Data/backend layer (schema + typed query helpers) exists for all of the
 above already (Prompt 2) — remaining work is wiring real pages to it, the
@@ -890,15 +984,18 @@ same pattern Prompt 3 (auth) and Prompt 4 (listings) applied.
 Run in order; 001–011 predate this doc, 012 was added in Prompt 3. Prompt 5
 (Chat) added three (013–015). Prompt 6 (Orders) added two more (016–017).
 Prompt 7 (Seller dashboard) added none — it only wired up mutations and
-queries that already existed against schema/RLS already live.
+queries that already existed against schema/RLS already live. Prompt 9
+(Profiles and reviews) added one more (018).
 
-**Status: all 17 migrations have been run successfully against the live
+**Status: migrations 001–017 have been run successfully against the live
 Supabase project as of 2026-07-11.** 013–014 were confirmed individually
 during a guided walkthrough; 015 was walked through in that same session
 but its success wasn't explicitly confirmed in chat until afterward
 (Builder confirmed retroactively: it completed successfully during that
 session); 016–017 were walked through and confirmed individually in a
-follow-up session.
+follow-up session. **018 has been written but not yet run against the live
+project** — needs the same SQL Editor walkthrough before review editing is
+used against production data.
 
 | # | File | Purpose |
 |---|---|---|
@@ -919,6 +1016,7 @@ follow-up session.
 | 015 | `015_conversations_last_message_preview.sql` | Denormalizes `last_message_body`/`last_message_sender_id` onto `conversations` for the inbox preview, no bug. **Applied.** |
 | 016 | `016_orders_one_open_per_buyer_listing.sql` | Partial unique index: at most one open order per (listing, buyer). **Applied.** |
 | 017 | `017_orders_freeze_immutable_columns.sql` | Adds the missing UPDATE `with check` on `orders` — without it, `amount`/`listing_id`/`buyer_id`/`seller_id` could be silently rewritten by either participant as long as `status` wasn't touched (BUGS.md #12). **Applied.** |
+| 018 | `018_fix_reviews_update_policy.sql` | Fixes the tautological UPDATE `with check` on `reviews` and additionally freezes `order_id`, which the original policy never constrained (BUGS.md #13). **Not yet applied.** |
 
 No seed script exists yet (PRD §9 calls for one) — still outstanding.
 
@@ -958,15 +1056,12 @@ No seed script exists yet (PRD §9 calls for one) — still outstanding.
   The seller-side advance-to-delivered → review-unlock → listing-marked-sold
   chain can't be fully exercised until the seller dashboard (next prompt)
   adds the Confirm/Ship/Deliver buttons.
-- **`reviews: reviewer update own` (migration 010) has the same
-  tautological `with check` bug as migrations 007/008 had before being
-  fixed** (`reviewer_id = reviewer_id and seller_id = seller_id` — always
-  true, doesn't actually freeze those columns on update). Found during
-  Prompt 6 but **deliberately not fixed** — this prompt only exercises the
-  reviews *insert* path (`createReview`, from the tracking page's "Leave a
-  Review" action), not `updateReview`, so it was left as a documented gap
-  rather than expanding scope. Fix it (same subquery idiom as migrations
-  013/014/017) before building any review-editing UI. See BUGS.md #13.
+- **Migration 018 (fixes the `reviews` UPDATE policy, BUGS.md #13) has not
+  yet been run against the live Supabase project.** The review-editing UI
+  built in Prompt 9 calls `updateReview`, which will currently hit the
+  *old*, still-live tautological policy until 018 is applied via the SQL
+  Editor (same process as 013/014/017) — run it before Builder click-tests
+  editing a review.
 - No Playwright e2e suite yet, despite being named in the PRD tech stack.
   Claude's own verification of Prompt 4 stopped at build/tests/lint plus a
   live anonymous-client data-layer smoke script — no browser automation
@@ -1017,14 +1112,16 @@ end (confirm → ship → deliver an order, watch My Listings flip to sold and
 Earnings update) — see the "Verified" note in the 2026-07-12 log entry
 above.
 
-**After that: the remaining PRD gaps are §7.11 (public profile doesn't
-show a seller's listings or reviews yet) and finishing §7.12 (review
-editing UI; displaying reviews anywhere).** Both are smaller than the last
-few prompts — mostly wiring already-built query functions
-(`fetchReviewsForSeller`, `updateReview`, `fetchListingsBySeller` again for
-the public view) into `PublicProfilePage`, which is still a placeholder.
-Confirm scope with the user before starting, per this session's
-established pattern. Also still outstanding, unrelated to any specific
-PRD section: no seed script (§9), no Playwright suite, and BUGS.md #13
-(reviews update-policy tautology) should be fixed before any review-editing
-UI ships.
+**Prompt 9 (Profiles and reviews) is implementation-complete.** §7.11 and
+§7.12 are both now ✅ in the table above. **Before Builder click-tests
+review editing or the public profile, migration 018 needs to be run
+against the live Supabase project** (SQL Editor, same process as
+013/014/017) — see "Database migrations" and "Known assumptions" above.
+After that, a manual pass: view another user's public profile, leave a
+review after a delivered order, edit it, confirm it appears on the
+seller's public profile and their own "Reviews Received" section, and
+confirm the avg rating matches across the product page, the public
+profile, and (once more than one review exists) after editing one.
+
+Also still outstanding, unrelated to any specific PRD section: no seed
+script (§9), no Playwright suite.

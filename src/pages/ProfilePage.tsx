@@ -14,6 +14,9 @@ import { useAuth } from "../context/AuthContext"
 import { getAvatarPublicUrl, updateProfile, uploadAvatar } from "../lib/queries/profiles"
 import { profileSchema, type ProfileFormValues } from "../lib/validation/auth"
 import { NIGERIAN_STATES } from "../utils/nigeria"
+import { PurchaseHistorySection } from "./profile/PurchaseHistorySection"
+import { SalesHistorySection } from "./profile/SalesHistorySection"
+import { ReviewsReceivedSection } from "./profile/ReviewsReceivedSection"
 
 const STATE_OPTIONS = NIGERIAN_STATES.map((state) => ({ value: state, label: state }))
 
@@ -86,8 +89,8 @@ export const ProfilePage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-xl mx-auto">
-      <Card className="p-6 md:p-8 space-y-6">
+    <div className="max-w-3xl mx-auto space-y-10">
+      <Card className="p-6 md:p-8 space-y-6 max-w-xl mx-auto">
         <div className="border-b border-border pb-4 flex justify-between items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold text-serif text-text">
@@ -159,6 +162,14 @@ export const ProfilePage: React.FC = () => {
           </Button>
         </form>
       </Card>
+
+      {!isSetupFlow && (
+        <>
+          <PurchaseHistorySection userId={user.id} />
+          <SalesHistorySection userId={user.id} />
+          <ReviewsReceivedSection userId={user.id} />
+        </>
+      )}
     </div>
   )
 }
