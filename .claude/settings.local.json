@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(:)",
+      "Bash(npx tsc *)",
+      "Bash(sed -i '' '669,796d' src/pages/Placeholders.tsx)",
+      "Bash(sed -i '' '557,615d' src/pages/Placeholders.tsx)"
+    ]
+  }
+}

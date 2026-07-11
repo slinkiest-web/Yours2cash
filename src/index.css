@@ -1,0 +1,55 @@
+@import "@fontsource/fraunces/400.css";
+@import "@fontsource/fraunces/500.css";
+@import "@fontsource/fraunces/600.css";
+@import "@fontsource/fraunces/700.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-primary: #51181F;
+    --color-primary-foreground: #FFFFFF;
+    --color-deep: #3D1119;
+    --color-surface: #FFFFFF;
+    --color-surface-raised: #E8E8E8;
+    --color-border: #D4D6D8;
+    --color-text: #1A1416;
+    --color-text-muted: #5E6368;
+  }
+
+  .dark {
+    --color-primary: #B8434E;
+    --color-primary-foreground: #100507;
+    --color-deep: #3D1119;
+    --color-surface: #1A0A0E;
+    --color-surface-raised: #241014;
+    --color-border: #3A2228;
+    --color-text: #F5F0F1;
+    --color-text-muted: #BABEC1;
+  }
+
+  body {
+    @apply bg-surface text-text font-sans antialiased transition-colors duration-200;
+  }
+
+  /* Accessible focus ring style */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-surface;
+  }
+}
+
+@layer utilities {
+  .text-serif {
+    font-family: "Fraunces", serif;
+  }
+
+  .text-sans {
+    font-family: "Inter", sans-serif;
+  }
+}
