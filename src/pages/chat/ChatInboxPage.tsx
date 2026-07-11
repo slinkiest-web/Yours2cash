@@ -88,7 +88,9 @@ export const ChatInboxPage: React.FC = () => {
                       {previewPrefix}
                       {preview}
                     </p>
-                    <p className="text-xs text-text-muted truncate">{conversation.listing.title}</p>
+                    <p className="text-xs text-text-muted truncate">
+                      {conversation.listing?.title ?? "Listing no longer available"}
+                    </p>
                   </div>
                   {isUnread && (
                     <span

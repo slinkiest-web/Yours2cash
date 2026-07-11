@@ -425,7 +425,13 @@ export type ListingWithSeller = Listing & {
 export type ConversationWithParticipants = Conversation & {
   buyer: Profile
   seller: Profile
-  listing: Pick<Listing, "id" | "title" | "price">
+  /**
+   * Null when the caller can no longer read the listing under its own RLS
+   * policy (`status = 'active' or seller_id = auth.uid()`) — e.g. a buyer
+   * viewing a conversation whose listing has since been marked sold/removed.
+   * Same nullability reasoning as OrderWithDetails.listing.
+   */
+  listing: Pick<Listing, "id" | "title" | "price"> | null
 }
 
 export type MessageWithSender = Message & {
@@ -433,9 +439,18 @@ export type MessageWithSender = Message & {
 }
 
 export type OrderWithDetails = Order & {
-  listing: Pick<Listing, "id" | "title" | "price"> & {
-    listing_images: Pick<ListingImage, "storage_path" | "position">[]
-  }
+  /**
+   * Null when the caller can no longer read the listing under its own RLS
+   * policy (`status = 'active' or seller_id = auth.uid()`) — e.g. a buyer
+   * viewing an order whose listing has since been marked sold/removed. The
+   * seller can always read their own listing regardless of status, so this
+   * is only ever null from the buyer's side.
+   */
+  listing:
+    | (Pick<Listing, "id" | "title" | "price"> & {
+        listing_images: Pick<ListingImage, "storage_path" | "position">[]
+      })
+    | null
   buyer: Profile
   seller: Profile
   order_events: OrderEvent[]

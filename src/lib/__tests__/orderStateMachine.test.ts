@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   canTransitionOrder,
   getAvailableActions,
+  getSellerAdvanceAction,
   isOpenOrderStatus,
   resolveActorRole,
 } from "../orderStateMachine"
@@ -117,5 +118,28 @@ describe("isOpenOrderStatus", () => {
   it("treats delivered and cancelled as not open", () => {
     expect(isOpenOrderStatus("delivered")).toBe(false)
     expect(isOpenOrderStatus("cancelled")).toBe(false)
+  })
+})
+
+// Powers the seller dashboard's single "advance this order" button. Built on
+// getAvailableActions, but tested separately so a regression in the
+// dashboard-facing wrapper (wrong label, wrong target status) is caught even
+// if the underlying transition table is untouched.
+describe("getSellerAdvanceAction", () => {
+  it("offers Confirm Order from pending", () => {
+    expect(getSellerAdvanceAction("pending")).toEqual({ status: "confirmed", label: "Confirm Order" })
+  })
+
+  it("offers Mark as Shipped from confirmed", () => {
+    expect(getSellerAdvanceAction("confirmed")).toEqual({ status: "shipped", label: "Mark as Shipped" })
+  })
+
+  it("offers Mark as Delivered from shipped", () => {
+    expect(getSellerAdvanceAction("shipped")).toEqual({ status: "delivered", label: "Mark as Delivered" })
+  })
+
+  it("offers nothing once delivered or cancelled", () => {
+    expect(getSellerAdvanceAction("delivered")).toBeNull()
+    expect(getSellerAdvanceAction("cancelled")).toBeNull()
   })
 })

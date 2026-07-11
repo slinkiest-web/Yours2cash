@@ -85,7 +85,9 @@ export const OrderTrackingPage: React.FC = () => {
   }
 
   const otherParty = role === "seller" ? order.buyer : order.seller
-  const primaryImage = [...order.listing.listing_images].sort((a, b) => a.position - b.position)[0]
+  const primaryImage = order.listing
+    ? [...order.listing.listing_images].sort((a, b) => a.position - b.position)[0]
+    : undefined
   const eventTimestamps = new Map(order.order_events.map((event) => [event.status, event.created_at]))
   const isCancelled = order.status === "cancelled"
   const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(
@@ -117,12 +119,16 @@ export const OrderTrackingPage: React.FC = () => {
           ) : null}
         </div>
         <div className="flex-1 min-w-0">
-          <Link
-            to={`/product/${order.listing.id}`}
-            className="font-bold text-text hover:text-primary transition-colors"
-          >
-            {order.listing.title}
-          </Link>
+          {order.listing ? (
+            <Link
+              to={`/product/${order.listing.id}`}
+              className="font-bold text-text hover:text-primary transition-colors"
+            >
+              {order.listing.title}
+            </Link>
+          ) : (
+            <p className="font-bold text-text">Listing no longer available</p>
+          )}
           <p className="text-xs text-text-muted">Order #{order.id.slice(0, 8)}</p>
         </div>
         <div className="text-lg font-bold text-serif text-primary shrink-0">

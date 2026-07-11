@@ -18,11 +18,8 @@ import { ChatInboxPage } from "./pages/chat/ChatInboxPage"
 import { ChatThreadPage } from "./pages/chat/ChatThreadPage"
 import { OrdersPage } from "./pages/orders/OrdersPage"
 import { OrderTrackingPage } from "./pages/orders/OrderTrackingPage"
-import {
-  SellerDashboardPage,
-  PublicProfilePage,
-  NotFoundPage,
-} from "./pages/Placeholders"
+import { SellerDashboardPage } from "./pages/seller/SellerDashboardPage"
+import { PublicProfilePage, NotFoundPage } from "./pages/Placeholders"
 
 const queryClient = new QueryClient({
   defaultOptions: {

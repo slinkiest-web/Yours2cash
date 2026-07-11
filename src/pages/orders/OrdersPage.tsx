@@ -63,9 +63,9 @@ export const OrdersPage: React.FC = () => {
       ) : (
         <div className="space-y-4">
           {orders.map((order) => {
-            const primaryImage = [...order.listing.listing_images].sort(
-              (a, b) => a.position - b.position
-            )[0]
+            const primaryImage = order.listing
+              ? [...order.listing.listing_images].sort((a, b) => a.position - b.position)[0]
+              : undefined
 
             return (
               <Link key={order.id} to={`/orders/${order.id}`} className="block">
@@ -80,7 +80,9 @@ export const OrdersPage: React.FC = () => {
                     ) : null}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-text truncate">{order.listing.title}</h3>
+                    <h3 className="font-bold text-text truncate">
+                      {order.listing?.title ?? "Listing no longer available"}
+                    </h3>
                     <span className="text-xs text-text-muted">
                       {formatRelativeTime(order.created_at)}
                     </span>

@@ -7,10 +7,10 @@ import { Badge } from "../../components/ui/Badge"
 import { Avatar } from "../../components/ui/Avatar"
 import { Spinner } from "../../components/ui/Spinner"
 import { EmptyState } from "../../components/ui/EmptyState"
-import { Modal } from "../../components/ui/Modal"
+import { DeleteListingModal } from "../../components/listings/DeleteListingModal"
 import { useToast } from "../../components/ui/Toast"
 import { useAuth } from "../../context/AuthContext"
-import { deleteListing, fetchListingById, getListingImagePublicUrl } from "../../lib/queries/listings"
+import { fetchListingById, getListingImagePublicUrl } from "../../lib/queries/listings"
 import { upsertConversation } from "../../lib/queries/chat"
 import { createOrder, fetchOpenOrderForListing } from "../../lib/queries/orders"
 import { getAvatarPublicUrl } from "../../lib/queries/profiles"
@@ -26,7 +26,6 @@ export const ProductDetailPage: React.FC = () => {
   const queryClient = useQueryClient()
   const [activeImage, setActiveImage] = useState(0)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
   const [isStartingChat, setIsStartingChat] = useState(false)
   const [isBuying, setIsBuying] = useState(false)
 
@@ -36,19 +35,6 @@ export const ProductDetailPage: React.FC = () => {
     enabled: !!id,
   })
   const listing = listingQuery.data?.data
-
-  const handleDelete = async () => {
-    setIsDeleting(true)
-    const { error } = await deleteListing(id!)
-    setIsDeleting(false)
-    if (error) {
-      showToast(error, "error")
-      return
-    }
-    showToast("Listing removed.", "success")
-    queryClient.invalidateQueries({ queryKey: ["listings"] })
-    navigate("/dashboard")
-  }
 
   const handleMessageSeller = async () => {
     if (!listing) return
@@ -240,22 +226,16 @@ export const ProductDetailPage: React.FC = () => {
         </div>
       </div>
 
-      <Modal isOpen={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} title="Delete this listing?">
-        <div className="space-y-4">
-          <p className="text-sm text-text-muted">
-            This removes "{listing.title}" from Yours2Cash. Buyers will no longer be able to find or
-            message you about it. This cannot be undone.
-          </p>
-          <div className="flex gap-3 justify-end">
-            <Button variant="secondary" onClick={() => setIsDeleteOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" isLoading={isDeleting} onClick={handleDelete}>
-              Delete Listing
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <DeleteListingModal
+        isOpen={isDeleteOpen}
+        onClose={() => setIsDeleteOpen(false)}
+        listingId={listing.id}
+        listingTitle={listing.title}
+        onDeleted={() => {
+          queryClient.invalidateQueries({ queryKey: ["listings"] })
+          navigate("/dashboard")
+        }}
+      />
     </div>
   )
 }

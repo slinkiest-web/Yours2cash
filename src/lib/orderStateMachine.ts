@@ -56,3 +56,27 @@ export function resolveActorRole(
   if (order.seller_id === userId) return "seller"
   return null
 }
+
+export interface OrderAdvanceAction {
+  status: OrderStatus
+  label: string
+}
+
+const SELLER_ADVANCE_LABELS: Partial<Record<OrderStatus, string>> = {
+  confirmed: "Confirm Order",
+  shipped: "Mark as Shipped",
+  delivered: "Mark as Delivered",
+}
+
+/**
+ * The single next seller-facing action available for this order, if any —
+ * used by the seller dashboard to render exactly one "advance" button per
+ * order. Built on top of getAvailableActions so it can never drift from the
+ * transition rules above (there's only ever at most one forward step for a
+ * seller at any given status).
+ */
+export function getSellerAdvanceAction(status: OrderStatus): OrderAdvanceAction | null {
+  const [next] = getAvailableActions(status, "seller")
+  if (!next) return null
+  return { status: next, label: SELLER_ADVANCE_LABELS[next] ?? next }
+}

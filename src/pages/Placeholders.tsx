@@ -1,66 +1,11 @@
 import React from "react"
 import { Link, useParams } from "react-router-dom"
-import { MapPin, ShoppingBag, Inbox, AlertCircle } from "lucide-react"
-import { Button } from "../components/ui/Button"
+import { MapPin, AlertCircle } from "lucide-react"
 import { Card } from "../components/ui/Card"
 import { Badge } from "../components/ui/Badge"
 import { Avatar } from "../components/ui/Avatar"
 import { EmptyState } from "../components/ui/EmptyState"
 import { formatNaira } from "../utils/formatters"
-
-export const SellerDashboardPage: React.FC = () => {
-  return (
-    <div className="space-y-8">
-      <div className="border-b border-border pb-4 flex justify-between items-end">
-        <div>
-          <h1 className="text-3xl font-bold text-serif text-text">Seller Dashboard</h1>
-          <p className="text-text-muted text-sm mt-1">Manage listings and completed order earnings.</p>
-        </div>
-        <div className="bg-surface-raised border border-border p-4 rounded-card text-right">
-          <span className="text-xs text-text-muted block">Mock Earnings</span>
-          <span className="text-xl font-bold text-serif text-primary">{formatNaira(109000)}</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <Card className="p-6 space-y-4">
-          <h2 className="text-xl font-bold text-serif text-text flex items-center gap-2">
-            <Inbox className="w-5 h-5 text-primary" /> Active Listings
-          </h2>
-          <div className="space-y-3">
-            {[
-              { id: "1", title: "Premium Soundbar System", price: 85000, status: "active" },
-              { id: "2", title: "Smart Watch Series 8", price: 110000, status: "sold" },
-            ].map((listing) => (
-              <div key={listing.id} className="flex justify-between items-center border-b border-border pb-2 last:border-0 last:pb-0">
-                <div>
-                  <span className="font-semibold text-text block">{listing.title}</span>
-                  <span className="text-xs text-text-muted">{formatNaira(listing.price)}</span>
-                </div>
-                <Badge variant={listing.status === "active" ? "primary" : "secondary"}>{listing.status}</Badge>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card className="p-6 space-y-4">
-          <h2 className="text-xl font-bold text-serif text-text flex items-center gap-2">
-            <ShoppingBag className="w-5 h-5 text-primary" /> Customer Orders
-          </h2>
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <div>
-                <span className="font-semibold text-text block">Smart Watch Series 8</span>
-                <span className="text-xs text-text-muted">Buyer, Chidi Nnamdi</span>
-              </div>
-              <Button size="sm">Fulfill</Button>
-            </div>
-          </div>
-        </Card>
-      </div>
-    </div>
-  )
-}
 
 export const PublicProfilePage: React.FC = () => {
   const { id } = useParams<{ id: string }>()

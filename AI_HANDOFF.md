@@ -542,6 +542,189 @@ mutations exist and are tested now, but nothing in this prompt's UI calls
   dashboard exists) walk one order all the way to delivered to confirm the
   review action unlocks and the listing flips to sold.
 
+### Prompt 7 — Seller dashboard (2026-07-12)
+
+Built the three-tab seller dashboard (PRD §7.10), wiring together query
+functions built but unused since earlier prompts: `fetchListingsBySeller`
+(Prompt 2), `fetchSellerOrders`/`confirmOrder`/`shipOrder`/`deliverOrder`
+(Prompt 6). **No new migrations or RLS changes this session** — every
+mutation used here reuses schema/policies already live from prior prompts.
+
+**Added**
+- `src/components/ui/Tabs.tsx` — `Tabs`/`TabPanel`, a generic accessible
+  tab primitive (proper `role="tablist"/"tab"/"tabpanel"`, `aria-selected`,
+  roving `tabIndex`, arrow-key navigation between tabs). First dashboard
+  feature to need tabs, so this is a new UI-kit primitive, not a
+  dashboard-specific component — reusable if another multi-tab surface
+  shows up later.
+- `src/utils/listingStatus.ts` — `LISTING_STATUS_LABELS` /
+  `LISTING_STATUS_BADGE_VARIANT` (active/sold/removed), same shape as
+  Prompt 6's `orderStatus.ts`.
+- `getSellerAdvanceAction(status)` added to `orderStateMachine.ts` — wraps
+  `getAvailableActions(status, "seller")` plus a button label, so the
+  dashboard always renders exactly one "advance" button per order and can
+  never drift from the transition rules. New tests appended to
+  `orderStateMachine.test.ts` (4 cases: one per real status plus the two
+  terminal states).
+- `src/lib/earnings.ts` — `calculateEarnings(orders)`, a pure function:
+  filters to delivered orders, sums `amount` (never `listing.price`),
+  and returns up to 5 recent sales sorted by their `order_events`
+  "delivered" timestamp (same convention as the tracking page's timeline,
+  not `updated_at`). `src/lib/__tests__/earnings.test.ts` — 7 tests
+  (empty input, mixed statuses, amount-not-listing-price, multi-order sum,
+  sort order, the 5-item cap, and the updated_at fallback when no
+  'delivered' event exists).
+- `src/components/listings/DeleteListingModal.tsx` — extracted out of
+  `ProductDetailPage` now that `MyListingsTab` is a second real call site
+  (same "extract once a second call site exists" principle as
+  `ListingBrowser` in Prompt 4). Takes an `onDeleted` callback so each
+  caller decides what happens next (`ProductDetailPage` navigates to
+  `/dashboard`; `MyListingsTab` just invalidates and stays put).
+- `src/pages/seller/SellerDashboardPage.tsx` — real page (moved out of
+  `Placeholders.tsx`): tab shell only, local `useState` for the active tab
+  (not URL-synced — no request for shareable tab state, unlike Search's
+  filters).
+- `src/pages/seller/MyListingsTab.tsx` — seller's listings (all statuses,
+  not just active), thumbnail, status badge, Edit (→ `/sell/:id`) and
+  Delete (→ `DeleteListingModal`), a "List New Item" entry point, empty
+  state.
+- `src/pages/seller/MyOrdersTab.tsx` — seller's orders, buyer avatar+name,
+  item, amount, status badge, and the single advance button from
+  `getSellerAdvanceAction` when one applies. Per-order loading state
+  (`advancingOrderId`) so acting on one order doesn't spinner-lock the
+  whole list.
+- `src/pages/seller/EarningsTab.tsx` — total earnings, completed-sales
+  count, recent-sales list (all from `calculateEarnings`), with an
+  explicit "informational only, no real payments" banner per the PRD.
+
+**Modified**
+- `src/pages/listings/ProductDetailPage.tsx` — delete flow now delegates
+  to `DeleteListingModal` instead of an inline `Modal` + local
+  `isDeleting`/`handleDelete`.
+- `App.tsx` — `/dashboard` now points at the real `SellerDashboardPage`.
+- `Placeholders.tsx` — removed the placeholder `SellerDashboardPage` and
+  its now-unused `ShoppingBag`/`Inbox`/`Button` imports.
+
+**Architectural notes specific to this feature**
+- **My Orders and Earnings share one query key on purpose.** Both tabs
+  call `fetchSellerOrders` under the exact same key
+  (`["orders", "seller", user.id]`). TanStack Query dedupes this to a
+  single fetch/cache entry — Earnings doesn't need its own query, just a
+  different pure-function view (`calculateEarnings`) over the same data.
+  Only fetches when its tab is actually mounted (`TabPanel` returns `null`
+  for inactive tabs, so an inactive tab's `useQuery` never runs — though
+  since both tabs share a key, whichever mounts first primes the cache for
+  the other).
+- **Delivering an order invalidates three query keys, not one**: the
+  seller's own order list, the specific `["order", id]` (in case a tracking
+  page has it open), and `["listings"]` broadly — because `deliverOrder`
+  (Prompt 6) also flips the listing to sold, so `MyListingsTab`'s status
+  badge needs to refresh too.
+
+**Deliberately out of scope / unchanged**
+- Tab state is not synced to the URL (e.g. `?tab=orders`) — not requested,
+  and the dashboard is always reached fresh from nav, not deep-linked.
+- No pagination on any tab — matches every other list in the app so far
+  (Home, Search, Inbox, Orders); revisit if seed data or real usage makes
+  long lists a problem.
+- Public profile pages still don't show a seller's listings or reviews
+  (noted as a gap since Prompt 4/6) — untouched here, still PRD §7.11/7.12
+  territory.
+
+**Verified**
+- `tsc -b`, `vitest run` (**67/67 pass**: 56 prior + 11 new), `oxlint`
+  (same 3 pre-existing warnings), and `npm run build` all clean. Dev
+  server boots and serves without error.
+- No live-backend verification needed beyond what's already
+  live — every query/mutation this dashboard calls was already exercised
+  (or built and covered by existing RLS) in Prompts 2/4/6. Still worth a
+  manual pass once Builder has time: as a seller, confirm → ship → deliver
+  a real order and watch My Listings flip that listing to sold, watch
+  Earnings update, and confirm the buyer's tracking page and review unlock
+  reflect it (closing the loop Prompt 6 flagged as untestable until this
+  dashboard existed).
+
+### Regression fix — buyer Orders/tracking blank-page crash (2026-07-12)
+
+Builder's manual pass on the seller dashboard (predicted above) surfaced
+exactly the gap the Prompt 6 entry flagged as untestable until now — and
+it found a real bug: clicking "My Orders" as a buyer navigated to a blank
+page. Full write-up in **BUGS.md #14**; summary here since it required a
+type change shared across both buyer and seller order pages.
+
+**Root cause**: `OrderWithDetails.listing` was typed as always-present,
+but it's a Postgrest embed subject to the `listings` table's own RLS
+(`status = 'active' or seller_id = auth.uid()`). Once the seller dashboard
+shipped a real "Mark as Delivered" button, a delivered order's listing
+actually flips to `sold` for the first time via the app — and a buyer
+(not the seller) viewing that order then fails the listings SELECT policy,
+so the embedded `listing` comes back `null`. `OrdersPage.tsx` and
+`OrderTrackingPage.tsx` both accessed `order.listing.title` /
+`.listing_images` unguarded, so this threw during render and blanked the
+page (no error boundary exists in this app). The vulnerable code was
+written in Prompt 6; Prompt 7 (seller dashboard) is what first made the
+code path reachable, which is why it only surfaced now.
+
+**Fix**: widened `OrderWithDetails.listing` to nullable; added real
+fallback UI ("Listing no longer available") to the two buyer-facing pages
+that can genuinely hit it; added a documented non-null assertion to the
+two seller-facing tab components that structurally can't (a seller always
+has read access to their own listing). Diagnosed via a reproduction test
+written *before* the fix (confirmed the exact `TypeError` and line), which
+became the permanent regression test after the fix went in:
+`src/pages/orders/__tests__/OrdersPage.test.tsx` and
+`OrderTrackingPage.test.tsx` (3 tests total, both render an order with
+`listing: null` and assert the fallback renders instead of crashing).
+
+**Seller Dashboard functionality preserved**: `MyOrdersTab`/`EarningsTab`
+changes are type-only (a non-null assertion plus a comment) — no
+behavior change, confirmed by the full test suite staying green (70/70
+after this fix, no regressions).
+
+**Verified**: `tsc -b`, `vitest run` (**70/70 pass**: 67 prior + 3 new
+regression tests), `oxlint`, `npm run build` all clean. Not yet
+re-confirmed live by Builder — worth closing the loop on the original
+manual-test report by clicking "My Orders" again as the buyer on the
+account that had a delivered order.
+
+### Regression fix — buyer Chat blank-page crash (2026-07-12)
+
+Builder's next status check ("Buyer Chat broken") found the identical bug
+class immediately after the Orders fix above, in a second feature. Full
+write-up in **BUGS.md #15**; same reproduce-with-a-test-first method as
+#14.
+
+**Root cause**: `ConversationWithParticipants.listing` (Prompt 5, Chat) is
+built from the exact same kind of embedded `listings` resource as
+`OrderWithDetails.listing` was, subject to the same RLS
+(`status = 'active' or seller_id = auth.uid()`) — and was typed
+non-nullable for the same reason. Once a listing is marked sold, a buyer's
+embedded `listing` on their conversation about it comes back `null`.
+`ChatInboxPage.tsx` and `ChatThreadPage.tsx` both accessed
+`conversation.listing.title` unguarded (four call sites total). This was
+missed while fixing #14 because that fix was scoped to `OrderWithDetails`
+only — the codebase wasn't searched for *other* types with the same
+embedded-`listings` shape.
+
+**Fix**: same pattern as #14 — widened the type to nullable, added
+"Listing no longer available" / "a listing that is no longer available"
+fallbacks at all four call sites (`ChatThreadPage` consolidated three of
+them into one derived `listingTitle` variable rather than repeating the
+fallback inline). Two new regression test files, each reproducing the
+crash before the fix and confirming the fallback after:
+`src/pages/chat/__tests__/ChatInboxPage.test.tsx` (2 tests) and
+`ChatThreadPage.test.tsx` (1 test).
+
+**Verified**: `tsc -b`, `vitest run` (**73/73 pass**: 70 prior + 3 new),
+`oxlint`, `npm run build` all clean. Not yet re-confirmed live by Builder.
+
+**Open follow-up, not done in this pass**: this is now the *second* time
+the same embedded-`listings`-can-be-null gap was found in two unrelated
+features built at different times. No other hand-written type in
+`types/database.ts` currently embeds `listings`, so there's nothing left
+to audit today — but see the new Architectural decisions entry below for
+what to check before adding the next one.
+
 ---
 
 ## Architectural decisions
@@ -659,6 +842,23 @@ mutations exist and are tested now, but nothing in this prompt's UI calls
   `with check` for them, even if today's client code would never send
   those columns — RLS is the last line of defense against a client that
   doesn't go through the app's own query helpers at all.
+- **A read-only "derived view" over data another tab already fetches
+  should be a pure function, not its own query.** Earnings (Prompt 7) is a
+  computation over the exact same order list My Orders already fetches —
+  sharing the query key means one fetch serves both, and `calculateEarnings`
+  stays trivially unit-testable with plain arrays, no mocking. Reach for
+  this shape (shared query key + pure derive function) before adding a new
+  fetch whenever a feature is "the same data, summarized differently."
+- **Any hand-written type that embeds `listings` via a foreign key must be
+  nullable, and this has to be checked per-type, not just once.**
+  Confirmed twice now (BUGS.md #14 in `OrderWithDetails`, #15 in
+  `ConversationWithParticipants`) — `listings` RLS is
+  `status = 'active' or seller_id = auth.uid()`, so any embed of it is
+  null for a non-owning caller once the listing stops being active. Before
+  adding a new hand-written type with a `listings!<fkey>(...)` embed
+  (`grep -rn "listings!" src/lib/queries/` to find every current embed
+  site), default it to nullable and add fallback UI at every call site up
+  front — don't wait for a third feature to hit this the hard way.
 
 ---
 
@@ -672,10 +872,10 @@ mutations exist and are tested now, but nothing in this prompt's UI calls
 | 7.4 | Search and filter | ✅ Done (Prompt 4, hardened 2026-07-11) — text, category, state, city, condition, price range, sort; fully synced to URL query string; skeleton loading; accessible labels |
 | 7.5 | Product listing (CRUD) | ✅ Done (Prompt 4) — create/edit/delete, 1–6 photo upload, seller-only edit/delete |
 | 7.6 | Product details | ✅ Done (Prompt 4) — gallery, seller card, condition/location/price/description, owner vs buyer actions |
-| 7.7 | In-app chat | ✅ Done (Prompt 5, 2026-07-11) — realtime, scoped to a listing, create-or-reuse, optimistic send, unread tracking. **Not yet run against the live project** (migrations 013–015 pending) |
-| 7.8 | Orders (mock flow) | ✅ Buyer side done (Prompt 6, 2026-07-11) — create with price snapshot, cancel while pending, duplicate-open-order prevention. Seller-side advance (confirm/ship/deliver) mutations exist but no UI yet — **next prompt (seller dashboard)**. **Not yet run against the live project** (migrations 016–017 pending) |
+| 7.7 | In-app chat | ✅ Done (Prompt 5) — realtime, scoped to a listing, create-or-reuse, optimistic send, unread tracking. Migrations applied and confirmed 2026-07-11; manual click-through still outstanding (see Known assumptions) |
+| 7.8 | Orders (mock flow) | ✅ Done (Prompt 6 buyer side + Prompt 7 seller side) — create with price snapshot, cancel while pending, duplicate-open-order prevention, and now seller-side confirm/ship/deliver from the dashboard. Migrations applied and confirmed 2026-07-11 |
 | 7.9 | Order tracking | ✅ Done (Prompt 6) — status timeline from `order_events`, listing snapshot, other party, cancelled renders distinctly |
-| 7.10 | Seller dashboard | ⏳ Placeholder UI only — "My Listings"/"My Orders" tabs still not wired even though `fetchListingsBySeller` exists, and now also where confirm/ship/deliver buttons need to go — **candidate next** |
+| 7.10 | Seller dashboard | ✅ Done (Prompt 7, 2026-07-12) — My Listings (status, edit, delete, create entry point), My Orders (advance controls), Earnings (total/count/recent sales, informational banner) |
 | 7.11 | User profile | ✅ Own profile done and verified live (Prompt 3); public profile view (`/profile/:id`) still placeholder, does not yet show the seller's real listings or reviews |
 | 7.12 | Ratings and reviews | 🟡 Partial (Prompt 6) — buyer can leave a rating + comment once an order is delivered ("unlocks the review action" per PRD §7.8). No review editing UI, and reviews aren't displayed anywhere yet (seller's public profile, etc.) — that's the rest of this PRD section, still future work |
 
@@ -689,6 +889,8 @@ same pattern Prompt 3 (auth) and Prompt 4 (listings) applied.
 
 Run in order; 001–011 predate this doc, 012 was added in Prompt 3. Prompt 5
 (Chat) added three (013–015). Prompt 6 (Orders) added two more (016–017).
+Prompt 7 (Seller dashboard) added none — it only wired up mutations and
+queries that already existed against schema/RLS already live.
 
 **Status: all 17 migrations have been run successfully against the live
 Supabase project as of 2026-07-11.** 013–014 were confirmed individually
@@ -802,19 +1004,27 @@ app falls back to a placeholder Supabase URL and all backend calls fail.
 from 2026-07-11, both manually tested and accepted by Builder against the
 live project).
 
-**Prompt 5 (Chat): migrations 013–015 all confirmed applied.** Still needs
-the manual click-through described in "Known assumptions" above before
-considering it closed.
+**Prompt 5 (Chat): migrations confirmed applied.** Still needs the manual
+click-through described in "Known assumptions" above before considering it
+closed.
 
-**Prompt 6 (Orders/tracking): migrations 016–017 confirmed applied.**
-Still needs the manual click-through described in "Known assumptions"
-above before considering it closed.
+**Prompt 6 (Orders/tracking): migrations confirmed applied.** Still needs
+the manual click-through described in "Known assumptions" above.
 
-**After that: Seller dashboard (PRD §7.10).** This is the natural next
-prompt — it's what both Prompt 4 ("My Listings" tab, `fetchListingsBySeller`
-already unused) and Prompt 6 (Confirm/Ship/Deliver buttons calling the
-already-built `confirmOrder`/`shipOrder`/`deliverOrder` mutations, "Customer
-Orders" tab using `fetchSellerOrders`) have been deferring to. Only
-placeholder UI exists (`SellerDashboardPage` in `Placeholders.tsx`).
-Confirm with the user before starting, per this session's established
-pattern.
+**Prompt 7 (Seller dashboard) is implementation-complete, no migrations
+needed.** Worth a manual pass confirming the full seller-side loop end to
+end (confirm → ship → deliver an order, watch My Listings flip to sold and
+Earnings update) — see the "Verified" note in the 2026-07-12 log entry
+above.
+
+**After that: the remaining PRD gaps are §7.11 (public profile doesn't
+show a seller's listings or reviews yet) and finishing §7.12 (review
+editing UI; displaying reviews anywhere).** Both are smaller than the last
+few prompts — mostly wiring already-built query functions
+(`fetchReviewsForSeller`, `updateReview`, `fetchListingsBySeller` again for
+the public view) into `PublicProfilePage`, which is still a placeholder.
+Confirm scope with the user before starting, per this session's
+established pattern. Also still outstanding, unrelated to any specific
+PRD section: no seed script (§9), no Playwright suite, and BUGS.md #13
+(reviews update-policy tautology) should be fixed before any review-editing
+UI ships.

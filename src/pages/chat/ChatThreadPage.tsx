@@ -189,20 +189,25 @@ export const ChatThreadPage: React.FC = () => {
     )
   }
 
+  // The listing can be RLS-hidden from a buyer once the seller marks it
+  // sold (see BUGS.md #14/#15) — fall back to a plain label rather than
+  // crashing on a null embed.
+  const listingTitle = conversation.listing?.title ?? "a listing that is no longer available"
+
   return (
     <div className="max-w-xl mx-auto h-[600px] flex flex-col justify-between border border-border rounded-card bg-surface-raised overflow-hidden">
       <div className="p-4 bg-surface border-b border-border flex items-center gap-3">
         <Avatar name={otherParty.display_name} src={getAvatarPublicUrl(otherParty.avatar_url)} />
         <div>
           <h1 className="font-bold text-text">{otherParty.display_name}</h1>
-          <p className="text-xs text-text-muted">{conversation.listing.title}</p>
+          <p className="text-xs text-text-muted">{listingTitle}</p>
         </div>
       </div>
 
       <div
         role="log"
         aria-live="polite"
-        aria-label={`Conversation with ${otherParty.display_name} about ${conversation.listing.title}`}
+        aria-label={`Conversation with ${otherParty.display_name} about ${listingTitle}`}
         className="flex-1 p-4 overflow-y-auto space-y-4 bg-surface"
       >
         {messagesQuery.isLoading ? (
@@ -211,7 +216,7 @@ export const ChatThreadPage: React.FC = () => {
           </div>
         ) : messages.length === 0 ? (
           <p className="text-sm text-text-muted text-center py-8">
-            No messages yet — say hello about {conversation.listing.title}.
+            No messages yet — say hello about {listingTitle}.
           </p>
         ) : (
           messages.map((message) => {

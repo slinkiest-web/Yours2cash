@@ -485,3 +485,131 @@ than waiting to trip over each one individually while building the
 feature that happens to touch it.
 
 **Status:** Open — found, not fixed, not yet needed by any built feature
+
+---
+
+## 14. Buyer's "My Orders" and order tracking pages crash to a blank page once an order is delivered
+
+**Symptoms**
+Reported by Builder via manual testing: clicking "My Orders" as a buyer
+navigated to a completely blank page. Root-caused via a reproduction test
+(`OrdersPage.test.tsx`) before touching any source, which confirmed the
+exact crash:
+```
+TypeError: Cannot read properties of null (reading 'listing_images')
+ ❯ src/pages/orders/OrdersPage.tsx:66:52
+```
+An uncaught error during render unmounts the whole React tree (no error
+boundary exists in this app), which is what presents as "blank page"
+rather than a visible error.
+
+**Root Cause**
+`OrderWithDetails.listing` was typed as always present, but it comes from
+a Postgrest embedded resource (`listing:listings!orders_listing_id_fkey(...)`)
+that is itself subject to the `listings` table's own RLS SELECT policy:
+`status = 'active' or seller_id = auth.uid()`. Once an order reaches
+`delivered`, `deliverOrder()` (built in Prompt 6) flips the listing to
+`status = 'sold'` — at which point a *buyer* (who is not the listing's
+seller) no longer satisfies that policy, so the embed comes back `null`
+for that order. `OrdersPage.tsx` and `OrderTrackingPage.tsx` both
+unconditionally accessed `order.listing.title` / `order.listing.listing_images`
+with no null check, so this threw the moment a buyer viewed an order for
+a listing that had since been marked sold.
+
+This bug was latent since Prompt 6 (both buyer-facing pages were written
+without the null check), but there was no way to reach it through the UI
+until Prompt 8 shipped the seller dashboard's "Mark as Delivered" button —
+before that, `deliverOrder` existed but nothing ever called it, so no
+listing could ever actually become `sold` through the app. Prompt 8 didn't
+introduce the bug into the vulnerable code, but it's what made the crash
+reachable for the first time, which is why it only surfaced in manual
+testing after that prompt shipped.
+
+**Resolution**
+- Widened `OrderWithDetails.listing` in `types/database.ts` to
+  `... | null`, with a comment explaining exactly when it's null and why
+  it can never be null on the seller's own orders.
+- `OrdersPage.tsx` and `OrderTrackingPage.tsx` (genuinely reachable null,
+  buyer-facing) now null-guard every access and render "Listing no longer
+  available" in place of the title/link/thumbnail when `listing` is null.
+- `MyOrdersTab.tsx` and `EarningsTab.tsx` (seller-facing, structurally safe
+  — a seller can always read their own listing regardless of status) use a
+  documented non-null assertion (`order.listing!`) rather than defensive
+  UI for a case that can't occur there, per this codebase's existing
+  "don't add error handling for scenarios that can't happen" convention.
+- Added `src/pages/orders/__tests__/OrdersPage.test.tsx` and
+  `OrderTrackingPage.test.tsx`, each with a case that renders an order with
+  `listing: null` and asserts the fallback text appears instead of a crash.
+
+**How to avoid in future**
+When a hand-written type describes a Postgrest embedded resource, ask
+"does the *embedded* table have RLS that could differ from the *outer*
+table's caller?" — if the embed's own SELECT policy can exclude rows the
+outer row's policy allows, the embed is nullable, and the type should say
+so, even if no currently-reachable code path proves it (as happened here:
+the type was correct in isolation, wrong the moment a real workflow could
+change a related row's visibility). This is the same class of issue as
+BUGS.md #10–#12 (RLS correctness gaps invisible to `tsc`/tests until real
+usage), but on the read side instead of the write side.
+
+**Status:** Resolved
+
+---
+
+## 15. Buyer's Chat inbox and thread pages crash to a blank page for a conversation about a sold listing
+
+**Symptoms**
+Reported by Builder via manual testing after issue #14 was fixed: Buyer
+Chat broken ("NOT READY TO COMMIT"). Root-caused via a reproduction test
+written before touching any source (same method as #14), which confirmed:
+```
+TypeError: Cannot read properties of null (reading 'title')
+ ❯ src/pages/chat/ChatInboxPage.tsx:91:91
+```
+
+**Root Cause**
+Exactly issue #14's root cause, in a second feature that happens to embed
+the same table: `ConversationWithParticipants.listing` comes from
+`listing:listings!conversations_listing_id_fkey(id, title, price)`, an
+embedded resource subject to the `listings` table's own RLS
+(`status = 'active' or seller_id = auth.uid()`). Once an order for that
+conversation's listing is marked delivered, the listing flips to `sold`,
+and a buyer (not the seller) viewing that conversation no longer satisfies
+the policy — the embed comes back `null`. `ChatInboxPage.tsx` (inbox list)
+and `ChatThreadPage.tsx` (thread header, aria-label, and empty-state copy —
+three separate unguarded accesses) all read `conversation.listing.title`
+directly. `ConversationWithParticipants.listing` was typed as
+always-present, same as `OrderWithDetails.listing` was before #14.
+
+This was missed while fixing #14 because the fix there was scoped to
+`OrderWithDetails` — the same nullability reasoning applies to any other
+type built from an embedded `listings` resource, and `ConversationWithParticipants`
+(built in Prompt 5, before Orders existed) has the identical shape but
+wasn't audited at the time.
+
+**Resolution**
+- Widened `ConversationWithParticipants.listing` in `types/database.ts` to
+  `... | null`, with the same explanatory comment style as #14's fix.
+- `ChatInboxPage.tsx`: falls back to "Listing no longer available" in the
+  preview line.
+- `ChatThreadPage.tsx`: introduced one `listingTitle` derived variable
+  (`conversation.listing?.title ?? "a listing that is no longer available"`)
+  reused across the header, the `aria-label`, and the empty-thread message,
+  instead of three separate inline fallbacks.
+- Added `src/pages/chat/__tests__/ChatInboxPage.test.tsx` (normal case +
+  null-listing case) and `ChatThreadPage.test.tsx` (null-listing case),
+  following the same reproduce-then-fix method as #14.
+
+**How to avoid in future**
+This is the second time the exact same embedded-`listings`-can-be-null
+gap has been found in two different features (Orders, then Chat) built at
+different times from the same underlying table. Any *other* type that
+embeds `listings` via a foreign key — check for one before adding a new
+feature that does this again — should be treated as nullable by default
+unless the embedding table's own RLS guarantees the caller always has
+access (as is true for the seller's own listings, per #14's resolution).
+Search the codebase for `listings!` embeds when reviewing any new
+hand-written type derived from a join, rather than relying on remembering
+to re-derive this reasoning fresh each time.
+
+**Status:** Resolved
