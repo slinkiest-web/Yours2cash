@@ -1,8 +1,8 @@
 # Bugs — Yours2Cash
 
 Issues encountered during Prompt 3 (Authentication), Prompt 4 (Listings),
-and Prompt 5 (Chat). Add new entries here as issues come up in future
-prompts, using the same format.
+Prompt 5 (Chat), and Prompt 6 (Orders/tracking). Add new entries here as
+issues come up in future prompts, using the same format.
 
 ---
 
@@ -345,8 +345,8 @@ freeze a column on update, mentally substitute "new row" for every bare
 column reference in `with check` to check whether the expression is
 actually doing anything.
 
-**Status:** Resolved (fix written; not yet run against the live project —
-see AI_HANDOFF.md's Known Assumptions for migrations 013–015)
+**Status:** Resolved and applied to the live project (migration 013,
+confirmed 2026-07-11)
 
 ---
 
@@ -393,5 +393,95 @@ easy to miss because everything works perfectly the first time (no
 conflict yet) and only breaks on the second call, which may not surface
 until real usage rather than initial testing.
 
-**Status:** Resolved (fix written; not yet run against the live project —
-see AI_HANDOFF.md's Known Assumptions for migrations 013–015)
+**Status:** Resolved and applied to the live project (migration 014,
+confirmed 2026-07-11)
+
+---
+
+## 12. `orders` UPDATE policy had no `with check` at all — amount/listing_id/buyer_id/seller_id were silently rewritable
+
+**Symptoms**
+No runtime error — found by code review while implementing the Orders
+feature's mutation layer, cross-checking migration 008 against the client
+code being written (`advanceOrderStatus` and friends).
+
+**Root Cause**
+The `orders: participants update` policy (migration 008) has a `using`
+clause (`buyer_id = auth.uid() or seller_id = auth.uid()`) but **no
+`with check` at all**. Meanwhile, `enforce_order_state_transition` — the
+trigger meant to be "the authoritative rule" for this table per its own
+comment — only fires `when (old.status is distinct from new.status)`. Put
+those two facts together: an update that changes `amount` (or `listing_id`,
+`buyer_id`, `seller_id`) while leaving `status` untouched never triggers
+the transition check at all, and RLS has no `with check` to catch it
+either. Either participant could, via a bare `.update()` call that never
+goes through this app's query helpers, silently rewrite the order's price
+snapshot — directly undermining the PRD's stated guarantee that amount is
+an immutable snapshot ("price changes later do not affect historical order
+records").
+
+**Resolution**
+`supabase/migrations/017_orders_freeze_immutable_columns.sql` replaces the
+policy with one that adds a `with check` freezing `listing_id`, `buyer_id`,
+`seller_id`, and `amount` to their stored values (same subquery idiom as
+issues #10/#11), while leaving `status` and `updated_at` free to change —
+those are exactly the columns legitimate transitions touch.
+
+**How to avoid in future**
+An UPDATE policy with a `using` clause but no `with check` is a common
+pattern when the author is only thinking about *which rows* should be
+editable, not *which columns*. Whenever a table has "this column should
+never change after creation" columns (snapshots, foreign keys, amounts),
+write an explicit `with check` for them on every UPDATE policy — don't
+rely on a trigger that only fires conditionally on a different column to
+cover it. Reviewing a table's full RLS policy set together (not just the
+one relevant to the feature at hand) is what caught this one.
+
+**Status:** Resolved and applied to the live project (migration 017,
+confirmed 2026-07-11)
+
+---
+
+## 13. `reviews` UPDATE policy has the same tautological `with check` as issue #10 — found, not fixed
+
+**Symptoms**
+No runtime error — found by code review while reading migration 010 for
+context on the reviews write path used by Prompt 6's "leave a review"
+action. Not exercised: this prompt only calls `createReview` (insert),
+never `updateReview`.
+
+**Root Cause**
+`reviews: reviewer update own` (migration 010) has
+`with check (reviewer_id = auth.uid() and reviewer_id = reviewer_id and seller_id = seller_id)`.
+The last two clauses are the exact same tautology as issue #10
+(`messages: participant mark read`, fixed in migration 013) — inside an
+UPDATE policy's `with check`, a bare column reference resolves to the
+*new* row, so `reviewer_id = reviewer_id` and `seller_id = seller_id` are
+always true and don't actually prevent either column from changing. A
+buyer editing their own review could, in principle, also reassign it to a
+different seller or claim a different reviewer.
+
+**Resolution**
+None yet. Deliberately deferred — Prompt 6's scope was the order flow and
+"unlocks the review action" (insert only); no review-editing UI exists to
+exercise this path yet. Documented here so it isn't lost, and flagged in
+AI_HANDOFF.md's Known Assumptions.
+
+**How to avoid in future**
+Fix before building any review-editing UI, using the same subquery idiom
+as issues #10/#11/#12:
+```sql
+with check (
+  reviewer_id = auth.uid()
+  and reviewer_id = (select r.reviewer_id from public.reviews r where r.id = reviews.id)
+  and seller_id = (select r.seller_id from public.reviews r where r.id = reviews.id)
+)
+```
+More generally: now that this exact tautology pattern has appeared twice
+in this codebase (migrations 007 and 010, both apparently written in the
+same original pass), it's worth grepping the whole `supabase/migrations/`
+directory for self-comparison expressions whenever auditing RLS, rather
+than waiting to trip over each one individually while building the
+feature that happens to touch it.
+
+**Status:** Open — found, not fixed, not yet needed by any built feature

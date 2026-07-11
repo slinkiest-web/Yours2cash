@@ -8,58 +8,6 @@ import { Avatar } from "../components/ui/Avatar"
 import { EmptyState } from "../components/ui/EmptyState"
 import { formatNaira } from "../utils/formatters"
 
-export const OrdersPage: React.FC = () => {
-  return (
-    <div className="max-w-xl mx-auto space-y-6">
-      <div className="border-b border-border pb-4">
-        <h1 className="text-2xl font-bold text-serif text-text">Orders Tracker</h1>
-        <p className="text-text-muted text-sm mt-1">Track mock orders, rates are informational with no money moving.</p>
-      </div>
-
-      <div className="space-y-4">
-        {[
-          {
-            id: "1",
-            title: "Premium Soundbar System",
-            price: 85000,
-            status: "pending",
-            date: "Today",
-          },
-          {
-            id: "2",
-            title: "Vintage Leather Boots",
-            price: 24000,
-            status: "delivered",
-            date: "Yesterday",
-          },
-        ].map((order) => (
-          <Card key={order.id} className="p-5 space-y-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="font-bold text-text">{order.title}</h3>
-                <span className="text-xs text-text-muted">{order.date}</span>
-              </div>
-              <Badge variant={order.status === "delivered" ? "success" : "warning"}>{order.status}</Badge>
-            </div>
-            <div className="flex justify-between items-center border-t border-border pt-4">
-              <span className="text-lg font-bold text-serif text-primary">{formatNaira(order.price)}</span>
-              {order.status === "delivered" ? (
-                <Button variant="secondary" size="sm">
-                  Rate Seller
-                </Button>
-              ) : (
-                <Button variant="destructive" size="sm">
-                  Cancel Order
-                </Button>
-              )}
-            </div>
-          </Card>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 export const SellerDashboardPage: React.FC = () => {
   return (
     <div className="space-y-8">

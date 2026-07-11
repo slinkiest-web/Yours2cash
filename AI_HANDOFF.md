@@ -410,15 +410,137 @@ next prompt.
 - `tsc -b`, `vitest run` (**39/39 pass**: 30 prior + 9 new), `oxlint` (same
   3 pre-existing warnings), and `npm run build` all clean. Dev server boots
   and serves without error.
-- **Not verified against the live Supabase project**: migrations 013–015
-  have not been run yet (author has no migration-execution access, only the
-  anon key) — until they are, `conversations.last_message_body`/
-  `last_message_sender_id` don't exist on the live table, and the two RLS
-  fixes aren't live either. Needs the same "run migrations via SQL Editor,
-  then manually click through" cycle as Prompt 3/4: run 013–015 in order,
-  then click Message Seller from a product detail page as one user, send a
-  few messages, and (ideally) check from a second account/browser that
-  incoming messages appear live without a refresh.
+- Migrations 013–015 were run and **confirmed applied by Builder on
+  2026-07-11** via a guided walkthrough (013–014 confirmed individually at
+  the time; 015 confirmed retroactively after the fact). Still outstanding:
+  the manual click-through itself — click Message Seller from a product
+  detail page as one user, send a few messages, and (ideally) check from a
+  second account/browser that incoming messages appear live without a
+  refresh.
+
+### Prompt 6 — Mock order flow and tracking (2026-07-11)
+
+Built order creation, cancellation, and buyer-facing tracking (PRD §7.8/§7.9)
+on top of the Prompt 2 `orders.ts` query layer, plus enough of the review
+write path to satisfy "delivered unlocks the review action." Seller-side
+advancement (confirm/ship/deliver buttons) is explicitly deferred to the
+next prompt (seller dashboard) per this session's instructions — the
+mutations exist and are tested now, but nothing in this prompt's UI calls
+`confirmOrder`/`shipOrder`/`deliverOrder` yet.
+
+**Added**
+- `supabase/migrations/016_orders_one_open_per_buyer_listing.sql` — partial
+  unique index so a buyer can't have two open (pending/confirmed/shipped)
+  orders for the same listing at once. Complements an app-level check
+  (`fetchOpenOrderForListing`) that redirects to the existing order instead
+  of erroring — the index just closes the race condition underneath it.
+- `supabase/migrations/017_orders_freeze_immutable_columns.sql` — a real
+  RLS gap found while implementing this feature; see BUGS.md #12.
+- `src/lib/orderStateMachine.ts` — pure, framework-free module mirroring
+  migration 008's `enforce_order_state_transition` trigger exactly:
+  `canTransitionOrder(from, to, actor)`, `getAvailableActions(status, actor)`,
+  `resolveActorRole(order, userId)`, `isOpenOrderStatus(status)`. Same "pure
+  module, no I/O" pattern as `listingFilters.ts` (Prompt 4) — written
+  specifically so the transition guards are unit-testable in isolation.
+- `src/lib/__tests__/orderStateMachine.test.ts` — 17 tests covering every
+  valid transition, wrong-actor rejections, skip/backward/terminal-state
+  rejections, `getAvailableActions`, `resolveActorRole`, and
+  `isOpenOrderStatus`.
+- `src/lib/validation/review.ts` — `reviewSchema` (rating 1–5 required,
+  optional comment).
+- `src/utils/orderStatus.ts` — `ORDER_STATUS_LABELS` /
+  `ORDER_STATUS_BADGE_VARIANT`, shared by the orders list and tracking page.
+- `src/pages/orders/OrdersPage.tsx` — real page (moved out of
+  `Placeholders.tsx`): buyer's own orders, listing thumbnail, status badge,
+  amount, links to the tracking page. Buyer-only — seller's order list is
+  explicitly next-prompt scope.
+- `src/pages/orders/OrderTrackingPage.tsx` — real page: status badge,
+  listing snapshot (thumbnail, title, amount actually paid — not the
+  listing's current price), the other party, a status timeline built from
+  `order_events` (see Architectural notes below for how cancelled renders),
+  a Cancel button (buyer + pending only, gated by
+  `canTransitionOrder`), and a Leave a Review action (buyer + delivered +
+  not yet reviewed) that opens a small star-rating modal and calls
+  `createReview`.
+
+**Modified**
+- `src/lib/queries/orders.ts` — added `fetchOrderById`, `fetchOpenOrderForListing`,
+  and named wrappers `cancelOrder`/`confirmOrder`/`shipOrder`/`deliverOrder`
+  around the existing generic `advanceOrderStatus`. `deliverOrder` also
+  calls `updateListing(listingId, { status: "sold" })` (PRD: "delivered...
+  can mark the listing sold") — not wired to any button yet, but ready for
+  the seller dashboard prompt. Extracted a shared `ORDER_SELECT` constant
+  (now including a `listing_images` embed for thumbnails) used by
+  `fetchBuyerOrders`, `fetchSellerOrders`, and the new `fetchOrderById`.
+- `src/types/database.ts` — `OrderWithDetails.listing` now also picks
+  `listing_images` (storage_path, position) for the thumbnail shown on both
+  the orders list and the tracking page.
+- `src/pages/listings/ProductDetailPage.tsx` — "Buy Now" is no longer a
+  dead `Link` to `/orders` — it checks for an existing open order first
+  (redirects there with an info toast if found), otherwise calls
+  `createOrder(listing.id, user.id, listing.seller_id, listing.price)`
+  (the price snapshot) and navigates to `/orders/:id`. Signed-out click
+  redirects to login with a return path, same pattern as Message Seller
+  (Prompt 5). Self-ordering was already prevented by the existing `isOwner`
+  gate (owners see Edit/Delete, never Buy Now) — no change needed there.
+- `App.tsx` — `/orders` now points at the real buyer order list; added
+  `/orders/:id` for the tracking page.
+- `Placeholders.tsx` — removed the placeholder `OrdersPage`.
+
+**Architectural notes specific to this feature**
+- **Cancelled orders render as a distinct terminal state, not a stalled
+  timeline.** Rather than showing the 4-step pending→delivered stepper
+  frozen partway through, a cancelled order replaces the whole timeline
+  card with a single "Order Cancelled" marker and its timestamp (read from
+  `order_events`) — avoids the ambiguous "did it stop, or is it just slow?"
+  reading a frozen forward-stepper would give.
+- **The timeline's timestamps come from `order_events`, matched by status,
+  not recomputed from `orders.updated_at`.** `order_events` is
+  trigger-written and immutable (migration 009) — one row per status the
+  order has ever been in — so each completed step in the timeline shows
+  the actual time it was reached, not just the most recent update time.
+- **`amount` is the order's own snapshot column, distinct from the
+  listing's live `price`.** The tracking page and orders list both display
+  `order.amount` (what was actually charged/agreed at purchase time), never
+  `order.listing.price` (which could have changed since, or the listing
+  could since be edited/removed) — this is the whole point of the snapshot
+  per the PRD, and migration 017 (see BUGS.md #12) now makes it
+  RLS-enforced, not just a client-side convention.
+- **Client-side transition guards mirror the DB trigger exactly, on
+  purpose, not just "closely."** `orderStateMachine.ts`'s
+  `ORDER_TRANSITIONS` table is a direct transcription of migration 008's
+  `enforce_order_state_transition` if/else chain. If that trigger is ever
+  changed, this module must change with it — the tests in
+  `orderStateMachine.test.ts` are the fastest way to notice drift (update
+  the trigger, watch which client-side test expectations no longer make
+  sense).
+
+**Deliberately out of scope / unchanged**
+- No seller-facing "advance order" UI (Confirm/Ship/Deliver buttons) —
+  explicit next-prompt scope (seller dashboard), though the mutations
+  (`confirmOrder`, `shipOrder`, `deliverOrder`) exist and are covered by the
+  state-machine tests already.
+- No review *editing* UI (the buyer can leave one review per order but
+  there's no "edit your review" affordance yet, even though
+  `updateReview` already exists in the query layer) — PRD §7.12 (Ratings
+  and reviews) as a full feature, including showing reviews on a seller's
+  public profile, is still its own future prompt. This prompt only
+  implements the "unlocks the review action" piece PRD §7.8 explicitly
+  calls out.
+- `SellerDashboardPage`'s "Customer Orders" tab is still a placeholder —
+  unchanged, same as Prompt 4/5's note about "My Listings."
+
+**Verified**
+- `tsc -b`, `vitest run` (**56/56 pass**: 39 prior + 17 new), `oxlint` (same
+  3 pre-existing warnings), and `npm run build` all clean. Dev server boots
+  and serves without error.
+- Migrations 016–017 were run and **confirmed applied by Builder on
+  2026-07-11** via a guided walkthrough (each confirmed individually).
+  Still outstanding: the manual click-through itself — buy an item, confirm
+  the pending order and tracking page render correctly, cancel a different
+  pending order and confirm it renders as cancelled, and (once the seller
+  dashboard exists) walk one order all the way to delivered to confirm the
+  review action unlocks and the listing flips to sold.
 
 ---
 
@@ -520,6 +642,23 @@ next prompt.
   for a new message), resolve it from data already loaded client-side
   (`ChatThreadPage` matches `sender_id` against the conversation's already-
   fetched `buyer`/`seller`) instead of issuing a fetch per realtime event.
+- **When a DB trigger enforces a state machine, mirror it in a pure,
+  tested client-side module — don't re-derive the rules ad hoc per
+  component.** `orderStateMachine.ts` is a direct transcription of
+  migration 008's trigger. Any future state machine enforced by a trigger
+  (there's only Orders today) should follow the same shape: one pure module
+  with a transitions table, `canTransitionX`/`getAvailableActions`-style
+  functions, and tests that enumerate the trigger's full truth table —
+  not scattered `if` checks in whichever page happens to render the button.
+- **RLS `with check` gaps hide in what's *missing*, not just what's
+  wrong.** Migrations 013/014 (Prompt 5) fixed tautological checks;
+  migration 017 (this prompt) fixed an UPDATE policy with *no* `with check`
+  at all, which is arguably worse — it silently allows every column to
+  change, not just one. When adding or reviewing any RLS UPDATE policy,
+  explicitly ask "which columns must never change here?" and write a
+  `with check` for them, even if today's client code would never send
+  those columns — RLS is the last line of defense against a client that
+  doesn't go through the app's own query helpers at all.
 
 ---
 
@@ -534,11 +673,11 @@ next prompt.
 | 7.5 | Product listing (CRUD) | ✅ Done (Prompt 4) — create/edit/delete, 1–6 photo upload, seller-only edit/delete |
 | 7.6 | Product details | ✅ Done (Prompt 4) — gallery, seller card, condition/location/price/description, owner vs buyer actions |
 | 7.7 | In-app chat | ✅ Done (Prompt 5, 2026-07-11) — realtime, scoped to a listing, create-or-reuse, optimistic send, unread tracking. **Not yet run against the live project** (migrations 013–015 pending) |
-| 7.8 | Orders (mock flow) | ⏳ Placeholder UI only, query layer exists — **candidate next** |
-| 7.9 | Order tracking | ⏳ Placeholder UI only |
-| 7.10 | Seller dashboard | ⏳ Placeholder UI only — "My Listings"/"My Orders" tabs still not wired even though `fetchListingsBySeller` exists |
-| 7.11 | User profile | ✅ Own profile done and verified live (Prompt 3); public profile view (`/profile/:id`) still placeholder, does not yet show the seller's real listings |
-| 7.12 | Ratings and reviews | ⏳ Placeholder UI only, query layer exists |
+| 7.8 | Orders (mock flow) | ✅ Buyer side done (Prompt 6, 2026-07-11) — create with price snapshot, cancel while pending, duplicate-open-order prevention. Seller-side advance (confirm/ship/deliver) mutations exist but no UI yet — **next prompt (seller dashboard)**. **Not yet run against the live project** (migrations 016–017 pending) |
+| 7.9 | Order tracking | ✅ Done (Prompt 6) — status timeline from `order_events`, listing snapshot, other party, cancelled renders distinctly |
+| 7.10 | Seller dashboard | ⏳ Placeholder UI only — "My Listings"/"My Orders" tabs still not wired even though `fetchListingsBySeller` exists, and now also where confirm/ship/deliver buttons need to go — **candidate next** |
+| 7.11 | User profile | ✅ Own profile done and verified live (Prompt 3); public profile view (`/profile/:id`) still placeholder, does not yet show the seller's real listings or reviews |
+| 7.12 | Ratings and reviews | 🟡 Partial (Prompt 6) — buyer can leave a rating + comment once an order is delivered ("unlocks the review action" per PRD §7.8). No review editing UI, and reviews aren't displayed anywhere yet (seller's public profile, etc.) — that's the rest of this PRD section, still future work |
 
 Data/backend layer (schema + typed query helpers) exists for all of the
 above already (Prompt 2) — remaining work is wiring real pages to it, the
@@ -548,12 +687,16 @@ same pattern Prompt 3 (auth) and Prompt 4 (listings) applied.
 
 ## Database migrations
 
-Run in order; 001–011 predate this doc, 012 was added in Prompt 3. Prompt 4
-added no new migrations. Prompt 5 (Chat) added three (013–015).
-**Status: 001–012 have been run successfully against the live Supabase
-project as of 2026-07-04. 013–015 have NOT been run yet** — author has no
-migration-execution access in this environment (anon key only); these need
-to go through the SQL Editor like every migration before them.
+Run in order; 001–011 predate this doc, 012 was added in Prompt 3. Prompt 5
+(Chat) added three (013–015). Prompt 6 (Orders) added two more (016–017).
+
+**Status: all 17 migrations have been run successfully against the live
+Supabase project as of 2026-07-11.** 013–014 were confirmed individually
+during a guided walkthrough; 015 was walked through in that same session
+but its success wasn't explicitly confirmed in chat until afterward
+(Builder confirmed retroactively: it completed successfully during that
+session); 016–017 were walked through and confirmed individually in a
+follow-up session.
 
 | # | File | Purpose |
 |---|---|---|
@@ -569,9 +712,11 @@ to go through the SQL Editor like every migration before them.
 | 010 | `010_reviews.sql` | reviews table + RLS + rating trigger |
 | 011 | `011_storage.sql` | `listing-images` bucket + RLS |
 | 012 | `012_avatar_storage.sql` | `avatars` bucket + RLS (owner-scoped by `{user_id}/...` path) |
-| **013** | **`013_fix_messages_mark_read_policy.sql`** | **Fixes a tautological RLS check that let a participant rewrite a message's `sender_id` while marking it read (BUGS.md #10)** |
-| **014** | **`014_conversations_reuse_update_policy.sql`** | **Adds the missing UPDATE policy `upsertConversation`'s reuse path needs — without it, opening the same thread twice was rejected by RLS (BUGS.md #11)** |
-| **015** | **`015_conversations_last_message_preview.sql`** | **Denormalizes `last_message_body`/`last_message_sender_id` onto `conversations` for the inbox preview, no bug** |
+| 013 | `013_fix_messages_mark_read_policy.sql` | Fixes a tautological RLS check that let a participant rewrite a message's `sender_id` while marking it read (BUGS.md #10). **Applied.** |
+| 014 | `014_conversations_reuse_update_policy.sql` | Adds the missing UPDATE policy `upsertConversation`'s reuse path needs (BUGS.md #11). **Applied.** |
+| 015 | `015_conversations_last_message_preview.sql` | Denormalizes `last_message_body`/`last_message_sender_id` onto `conversations` for the inbox preview, no bug. **Applied.** |
+| 016 | `016_orders_one_open_per_buyer_listing.sql` | Partial unique index: at most one open order per (listing, buyer). **Applied.** |
+| 017 | `017_orders_freeze_immutable_columns.sql` | Adds the missing UPDATE `with check` on `orders` — without it, `amount`/`listing_id`/`buyer_id`/`seller_id` could be silently rewritten by either participant as long as `status` wasn't touched (BUGS.md #12). **Applied.** |
 
 No seed script exists yet (PRD §9 calls for one) — still outstanding.
 
@@ -596,15 +741,30 @@ No seed script exists yet (PRD §9 calls for one) — still outstanding.
   migrations" section below. If auth signups happened before migrations
   were run, existing accounts also need the one-time `profiles` backfill
   query documented in the 2026-07-04 log entry above.
-- **Chat (Prompt 5) is implementation-complete but migrations 013–015 have
-  not been run against the live project yet** — run them via the SQL
-  Editor, in order, before testing Chat at all. Until then, Message
-  Seller/the inbox/the thread page will error (missing columns and/or RLS
-  rejections on the second `upsertConversation` call). Once migrations run,
-  needs the same kind of manual click-through Prompt 3/4 got: open a
-  listing as a buyer, click Message Seller, send a message, confirm it
-  appears live in a second browser/account for the seller, and confirm the
-  unread dot clears when a thread is opened.
+- **Chat (Prompt 5): migrations 013–015 are all confirmed applied**
+  (2026-07-11) — see "Database migrations" above. Still needs the manual
+  click-through: open a listing as a buyer, click Message Seller, send a
+  message, confirm it appears live in a second browser/account for the
+  seller, confirm the inbox's last-message preview renders, and confirm
+  the unread dot clears when a thread is opened.
+- **Orders (Prompt 6): migrations 016–017 are confirmed applied**
+  (2026-07-11) — see "Database migrations" above. Still needs the manual
+  click-through: buy an item, confirm the order and its tracking page
+  render correctly (price snapshot, timeline), try Buy Now again on the
+  same listing and confirm it redirects to the existing order instead of
+  duplicating, cancel a pending order and confirm it renders as cancelled.
+  The seller-side advance-to-delivered → review-unlock → listing-marked-sold
+  chain can't be fully exercised until the seller dashboard (next prompt)
+  adds the Confirm/Ship/Deliver buttons.
+- **`reviews: reviewer update own` (migration 010) has the same
+  tautological `with check` bug as migrations 007/008 had before being
+  fixed** (`reviewer_id = reviewer_id and seller_id = seller_id` — always
+  true, doesn't actually freeze those columns on update). Found during
+  Prompt 6 but **deliberately not fixed** — this prompt only exercises the
+  reviews *insert* path (`createReview`, from the tracking page's "Leave a
+  Review" action), not `updateReview`, so it was left as a documented gap
+  rather than expanding scope. Fix it (same subquery idiom as migrations
+  013/014/017) before building any review-editing UI. See BUGS.md #13.
 - No Playwright e2e suite yet, despite being named in the PRD tech stack.
   Claude's own verification of Prompt 4 stopped at build/tests/lint plus a
   live anonymous-client data-layer smoke script — no browser automation
@@ -642,14 +802,19 @@ app falls back to a placeholder Supabase URL and all backend calls fail.
 from 2026-07-11, both manually tested and accepted by Builder against the
 live project).
 
-**Prompt 5 (Chat) is implementation-complete but not yet verified live** —
-run migrations 013–015 via the SQL Editor, then do the manual click-through
-described in "Known assumptions" above, before considering it closed.
+**Prompt 5 (Chat): migrations 013–015 all confirmed applied.** Still needs
+the manual click-through described in "Known assumptions" above before
+considering it closed.
 
-**After that: Orders (PRD §7.8), then Order tracking (§7.9), then Seller
-dashboard (§7.10, including finally wiring `fetchListingsBySeller` into
-the "My Listings" tab — noted as a gap since Prompt 4), then Ratings and
-reviews (§7.12).** Orders has a complete query layer already
-(`src/lib/queries/orders.ts`) and only placeholder UI
-(`OrdersPage`/`SellerDashboardPage` in `Placeholders.tsx`). Confirm with
-the user before starting, per this session's established pattern.
+**Prompt 6 (Orders/tracking): migrations 016–017 confirmed applied.**
+Still needs the manual click-through described in "Known assumptions"
+above before considering it closed.
+
+**After that: Seller dashboard (PRD §7.10).** This is the natural next
+prompt — it's what both Prompt 4 ("My Listings" tab, `fetchListingsBySeller`
+already unused) and Prompt 6 (Confirm/Ship/Deliver buttons calling the
+already-built `confirmOrder`/`shipOrder`/`deliverOrder` mutations, "Customer
+Orders" tab using `fetchSellerOrders`) have been deferring to. Only
+placeholder UI exists (`SellerDashboardPage` in `Placeholders.tsx`).
+Confirm with the user before starting, per this session's established
+pattern.

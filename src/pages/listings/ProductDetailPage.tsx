@@ -12,6 +12,7 @@ import { useToast } from "../../components/ui/Toast"
 import { useAuth } from "../../context/AuthContext"
 import { deleteListing, fetchListingById, getListingImagePublicUrl } from "../../lib/queries/listings"
 import { upsertConversation } from "../../lib/queries/chat"
+import { createOrder, fetchOpenOrderForListing } from "../../lib/queries/orders"
 import { getAvatarPublicUrl } from "../../lib/queries/profiles"
 import { formatNaira, formatRelativeTime } from "../../utils/formatters"
 import { formatCondition } from "../../utils/listingOptions"
@@ -27,6 +28,7 @@ export const ProductDetailPage: React.FC = () => {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isStartingChat, setIsStartingChat] = useState(false)
+  const [isBuying, setIsBuying] = useState(false)
 
   const listingQuery = useQuery({
     queryKey: ["listing", id],
@@ -62,6 +64,32 @@ export const ProductDetailPage: React.FC = () => {
       return
     }
     navigate(`/chat/${data.id}`)
+  }
+
+  const handleBuyNow = async () => {
+    if (!listing) return
+    if (!user) {
+      navigate("/auth/login", { state: { from: routerLocation } })
+      return
+    }
+    setIsBuying(true)
+
+    const { data: existingOrder } = await fetchOpenOrderForListing(listing.id, user.id)
+    if (existingOrder) {
+      setIsBuying(false)
+      showToast("You already have an order in progress for this listing.", "info")
+      navigate(`/orders/${existingOrder.id}`)
+      return
+    }
+
+    const { data, error } = await createOrder(listing.id, user.id, listing.seller_id, listing.price)
+    setIsBuying(false)
+    if (error || !data) {
+      showToast(error ?? "Could not place order.", "error")
+      return
+    }
+    showToast("Order placed.", "success")
+    navigate(`/orders/${data.id}`)
   }
 
   if (listingQuery.isLoading) {
@@ -194,11 +222,14 @@ export const ProductDetailPage: React.FC = () => {
                 >
                   <MessageSquare className="w-5 h-5" /> Message Seller
                 </Button>
-                <Link to="/orders" className="flex-1">
-                  <Button variant="primary" className="w-full flex items-center justify-center gap-2">
-                    Buy Now
-                  </Button>
-                </Link>
+                <Button
+                  variant="primary"
+                  className="flex-1 flex items-center justify-center gap-2"
+                  isLoading={isBuying}
+                  onClick={handleBuyNow}
+                >
+                  Buy Now
+                </Button>
               </div>
             ) : (
               <p className="text-sm text-text-muted">

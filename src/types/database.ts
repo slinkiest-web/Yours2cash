@@ -433,7 +433,9 @@ export type MessageWithSender = Message & {
 }
 
 export type OrderWithDetails = Order & {
-  listing: Pick<Listing, "id" | "title" | "price">
+  listing: Pick<Listing, "id" | "title" | "price"> & {
+    listing_images: Pick<ListingImage, "storage_path" | "position">[]
+  }
   buyer: Profile
   seller: Profile
   order_events: OrderEvent[]

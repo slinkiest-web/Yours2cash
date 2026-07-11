@@ -16,8 +16,9 @@ import { ProductDetailPage } from "./pages/listings/ProductDetailPage"
 import { ListingFormPage } from "./pages/listings/ListingFormPage"
 import { ChatInboxPage } from "./pages/chat/ChatInboxPage"
 import { ChatThreadPage } from "./pages/chat/ChatThreadPage"
+import { OrdersPage } from "./pages/orders/OrdersPage"
+import { OrderTrackingPage } from "./pages/orders/OrderTrackingPage"
 import {
-  OrdersPage,
   SellerDashboardPage,
   PublicProfilePage,
   NotFoundPage,
@@ -82,6 +83,14 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <OrdersPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/orders/:id"
+                    element={
+                      <ProtectedRoute>
+                        <OrderTrackingPage />
                       </ProtectedRoute>
                     }
                   />
