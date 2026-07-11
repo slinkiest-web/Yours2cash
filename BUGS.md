@@ -1,8 +1,8 @@
 # Bugs — Yours2Cash
 
-Issues encountered during Prompt 3 (Authentication) and Prompt 4 (Listings).
-Add new entries here as issues come up in future prompts, using the same
-format.
+Issues encountered during Prompt 3 (Authentication), Prompt 4 (Listings),
+and Prompt 5 (Chat). Add new entries here as issues come up in future
+prompts, using the same format.
 
 ---
 
@@ -305,3 +305,93 @@ project already hit one other zod v4 API surprise in Prompt 3
 worth the 30 seconds.
 
 **Status:** Resolved
+
+---
+
+## 10. Tautological RLS check let a participant rewrite a message's `sender_id` while marking it read
+
+**Symptoms**
+No runtime error — this was caught by code review while implementing the
+Chat feature's `markMessagesRead` flow, not by a failing test or a bug
+report. The `messages: participant mark read` policy (migration 007) has a
+`with check (sender_id = sender_id)`.
+
+**Root Cause**
+Inside a Postgres RLS `with check` expression for an `UPDATE` policy, an
+unqualified column reference resolves to the **new** row's value. Both
+sides of `sender_id = sender_id` are therefore the same value being
+compared to itself — the expression is a tautology, always `true`,
+regardless of what `sender_id` is submitted in the update payload. In
+practice this meant the "mark read" policy didn't actually constrain
+`sender_id` at all: a participant using `.update()` on a message in their
+conversation could, in principle, also change who it claims to be from.
+This directly undermines the guarantee stated in the neighboring insert
+policy's own comment ("cannot impersonate the other party").
+
+**Resolution**
+`supabase/migrations/013_fix_messages_mark_read_policy.sql` drops and
+recreates the policy, comparing the submitted `sender_id` against the
+row's *stored* value via a `select ... where id = messages.id` subquery —
+the standard Postgres RLS idiom for "this column must not change on
+update," since a bare correlated reference can't distinguish old vs. new
+inside `with check`.
+
+**How to avoid in future**
+Never write `with check (col = col)` expecting it to mean "col is
+unchanged" — it doesn't, on either `UPDATE` policies specifically (the
+classic mistake). Use `col = (select col from table where id = table.id)`
+instead, and when reviewing or writing any RLS policy that's supposed to
+freeze a column on update, mentally substitute "new row" for every bare
+column reference in `with check` to check whether the expression is
+actually doing anything.
+
+**Status:** Resolved (fix written; not yet run against the live project —
+see AI_HANDOFF.md's Known Assumptions for migrations 013–015)
+
+---
+
+## 11. Missing UPDATE policy on `conversations` broke the "reuse an existing conversation" path
+
+**Symptoms**
+No runtime error observed directly (not yet tested live — see note below),
+but reasoned out from Postgres's documented RLS behavior for
+`upsert`/`ON CONFLICT DO UPDATE` while implementing `upsertConversation`'s
+consumer (the Message Seller action): a **second** call to
+`upsertConversation` for the same `(listing_id, buyer_id, seller_id)`
+triple would be rejected under RLS.
+
+**Root Cause**
+`upsertConversation` calls `.upsert(payload, { onConflict: "listing_id,buyer_id,seller_id", ignoreDuplicates: false })`,
+which Postgres executes as `INSERT ... ON CONFLICT (...) DO UPDATE`.
+Postgres RLS checks the `DO UPDATE` branch against the table's **UPDATE**
+policies, not its INSERT policy — this is documented Postgres behavior,
+not Postgres-specific to this project. Migration 006 created an INSERT
+policy and a SELECT policy for `conversations`, but no UPDATE policy at
+all (its comment explicitly assumed conversations would only ever be
+mutated by the security-definer `last_message_at` trigger, not by a
+client-issued statement). The very first `upsertConversation` call for a
+given triple succeeds (pure INSERT, no conflict), but every subsequent
+call — i.e. every time a buyer reopens a chat with the same seller about
+the same listing, which is the entire point of "reuse" — would hit the
+conflict path and be denied by RLS with no matching UPDATE policy.
+
+**Resolution**
+`supabase/migrations/014_conversations_reuse_update_policy.sql` adds an
+UPDATE policy scoped to participants (`buyer_id = auth.uid() or seller_id
+= auth.uid()`), with a `with check` that only allows the update when
+`listing_id`/`buyer_id`/`seller_id` are unchanged from their stored values
+(via the same subquery idiom as issue #10) — i.e. exactly the no-op
+re-submit the upsert's conflict path performs, without opening the door to
+actually reassigning a conversation to a different listing or party.
+
+**How to avoid in future**
+Whenever a table's client-facing write path uses `.upsert()` with
+`onConflict`, treat that as needing **both** an INSERT and an UPDATE
+policy, even if the app "never intends" to issue a plain UPDATE — the
+conflict path *is* an UPDATE as far as Postgres RLS is concerned. This is
+easy to miss because everything works perfectly the first time (no
+conflict yet) and only breaks on the second call, which may not surface
+until real usage rather than initial testing.
+
+**Status:** Resolved (fix written; not yet run against the live project —
+see AI_HANDOFF.md's Known Assumptions for migrations 013–015)

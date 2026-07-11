@@ -1,5 +1,5 @@
 import React, { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router-dom"
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { MapPin, MessageSquare, Pencil, ShoppingBag, Star, Trash2 } from "lucide-react"
 import { Button } from "../../components/ui/Button"
@@ -11,6 +11,7 @@ import { Modal } from "../../components/ui/Modal"
 import { useToast } from "../../components/ui/Toast"
 import { useAuth } from "../../context/AuthContext"
 import { deleteListing, fetchListingById, getListingImagePublicUrl } from "../../lib/queries/listings"
+import { upsertConversation } from "../../lib/queries/chat"
 import { getAvatarPublicUrl } from "../../lib/queries/profiles"
 import { formatNaira, formatRelativeTime } from "../../utils/formatters"
 import { formatCondition } from "../../utils/listingOptions"
@@ -20,10 +21,12 @@ export const ProductDetailPage: React.FC = () => {
   const { user } = useAuth()
   const { showToast } = useToast()
   const navigate = useNavigate()
+  const routerLocation = useLocation()
   const queryClient = useQueryClient()
   const [activeImage, setActiveImage] = useState(0)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isStartingChat, setIsStartingChat] = useState(false)
 
   const listingQuery = useQuery({
     queryKey: ["listing", id],
@@ -43,6 +46,22 @@ export const ProductDetailPage: React.FC = () => {
     showToast("Listing removed.", "success")
     queryClient.invalidateQueries({ queryKey: ["listings"] })
     navigate("/dashboard")
+  }
+
+  const handleMessageSeller = async () => {
+    if (!listing) return
+    if (!user) {
+      navigate("/auth/login", { state: { from: routerLocation } })
+      return
+    }
+    setIsStartingChat(true)
+    const { data, error } = await upsertConversation(listing.id, user.id, listing.seller_id)
+    setIsStartingChat(false)
+    if (error || !data) {
+      showToast(error ?? "Could not start the conversation.", "error")
+      return
+    }
+    navigate(`/chat/${data.id}`)
   }
 
   if (listingQuery.isLoading) {
@@ -167,11 +186,14 @@ export const ProductDetailPage: React.FC = () => {
               </div>
             ) : isPurchasable ? (
               <div className="flex gap-4">
-                <Link to={`/chat/${listing.id}`} className="flex-1">
-                  <Button variant="secondary" className="w-full flex items-center justify-center gap-2">
-                    <MessageSquare className="w-5 h-5" /> Message Seller
-                  </Button>
-                </Link>
+                <Button
+                  variant="secondary"
+                  className="flex-1 flex items-center justify-center gap-2"
+                  isLoading={isStartingChat}
+                  onClick={handleMessageSeller}
+                >
+                  <MessageSquare className="w-5 h-5" /> Message Seller
+                </Button>
                 <Link to="/orders" className="flex-1">
                   <Button variant="primary" className="w-full flex items-center justify-center gap-2">
                     Buy Now

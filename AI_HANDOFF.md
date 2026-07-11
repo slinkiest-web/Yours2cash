@@ -222,13 +222,203 @@ conventions established in Prompt 3.
   `listing-images` and `avatars` storage buckets reachable; an anonymous
   insert into `listings` is correctly rejected by RLS). Dev server boots and
   serves without error.
-- **Not yet done**: an authenticated, interactive click-through (create a
-  listing with photos, see it on Home/Search/Category, open it, edit it,
-  delete it) against the live project. That requires either a real logged-in
-  session in a browser or browser-automation tooling neither available in
-  this environment — same limitation noted at the end of Prompt 3. Handed
-  off to the user with a specific checklist (see chat for the checklist);
-  Prompt 4 should not be considered closed until that pass comes back clean.
+- Author (Claude) had no browser-automation tooling available to click
+  through the authenticated UI directly — verification stopped at build/
+  tests/lint plus the live anonymous-client smoke test above. **Builder has
+  since manually tested and accepted Prompt 4** (create/edit/delete a
+  listing with photos, browse via Home/Search/Category, all against the
+  live project) — no defects reported. Prompt 4 is closed.
+
+### Prompt 4 follow-up — Discovery hardening (2026-07-11)
+
+Strengthened Home/Search/Category (PRD §7.2–7.4) to match the fuller spec:
+same filter bar reused across Search and Category, a city filter, loading
+skeletons instead of spinners, stricter accessibility, and unit tests for
+the two most logic-heavy, framework-free pieces (URL↔filter-state mapping
+and the Supabase query builder).
+
+**Added**
+- `src/lib/listingFilters.ts` — pure, React-free functions:
+  `parseListingFilters(params)`, `listingFiltersToParams(filters)`, and
+  `listingFilterStateToQuery(filters, categoryId)`. This is the "query
+  string to filter state" mapping, deliberately kept out of any hook/component
+  so it's trivially unit-testable.
+- `src/hooks/useListingFilters.ts` — thin `useSearchParams` wrapper around
+  the pure functions above; exposes `{ filters, applyFilters }`.
+- `src/components/listings/ListingBrowser.tsx` — the shared filter bar +
+  results grid, now used by **both** `SearchPage` and `CategoryPage` (PRD
+  §7.3: "Each category has its own browse view with the same filter bar as
+  search"). Takes an optional `lockedCategory` prop: when set, the category
+  select is hidden and the results are pinned to that category while every
+  other filter (state, city, condition, price, sort, text search) still
+  works and still syncs to the URL.
+- City filter — was in the `ListingFilters`/`searchListings` query contract
+  already (Prompt 4) but had no UI. Added as an `Input` field in `ListingBrowser`.
+- `src/components/ui/Skeleton.tsx` — generic pulsing placeholder primitive.
+- `src/components/listings/ListingCardSkeleton.tsx` — card-shaped skeleton,
+  used by `ListingBrowser`'s results grid and `HomePage`'s "Recently Added".
+  `HomePage`'s category row also got skeleton tiles for its loading state.
+  All loading grids are wrapped in `role="status" aria-live="polite"` with
+  an `sr-only` "Loading…" label so screen readers announce the loading state
+  instead of silence followed by a content jump.
+- Accessibility pass on the filter bar: the top search input has a visible
+  `sr-only` `<label>` (was placeholder-only before), the min/max price
+  inputs each get an `aria-label` (they share one visual heading but need
+  distinct accessible names), and `SearchPage`/all filter/sort controls use
+  the existing `Input`/`Select` components (which already render a proper
+  `<label htmlFor>`) rather than bare inputs — all native form controls, so
+  keyboard operability was already correct and needed no changes.
+- `src/lib/__tests__/listingFilters.test.ts` — 14 tests covering
+  `parseListingFilters` (defaults, full parse, invalid/missing sort
+  fallback, blank-vs-missing param equivalence), `listingFiltersToParams`
+  (empty state → empty query string, default sort omitted, round-trip
+  through `parseListingFilters`), and `listingFilterStateToQuery` (price
+  string→number conversion, blank and non-numeric prices become
+  `undefined` rather than `0`/`NaN`).
+- `src/lib/queries/__tests__/listings.test.ts` — 10 tests for `searchListings`,
+  mocking `supabase.from()` with a fake chainable, call-recording,
+  self-thenable query builder (mirrors real supabase-js: every step in the
+  chain is itself awaitable, so the mock doesn't assume which method is
+  called last). Covers: default active-only/newest/limit-50 behavior, the
+  `.or()` text search across title+description, every filter combining
+  correctly in one call, price sort direction, and success/error result
+  mapping.
+
+**Modified**
+- `SearchPage.tsx` — now just renders `<ListingBrowser />` (plus a
+  `sr-only` `<h1>` for document structure); all filter-bar/results JSX moved
+  into the shared component.
+- `CategoryPage.tsx` — resolves the category from the slug, then renders
+  `<ListingBrowser lockedCategory={category} />` instead of its own
+  hand-rolled results grid.
+- `HomePage.tsx` — category row and "Recently Added" loading states switched
+  from `Spinner` to skeleton grids (see above).
+
+**Verified**
+- `tsc -b`, `oxlint` (same 3 pre-existing warnings, no new ones), and
+  `npm run build` all clean.
+- `vitest run`: **30/30 tests pass** (6 pre-existing + 14 + 10 new).
+- Dev server boots and serves without error.
+- Did not re-run the live anonymous Supabase smoke test from the Prompt 4
+  entry above — `searchListings`'s actual query logic was not changed, only
+  *where* its input filters come from (the new pure-mapping module), so the
+  already-passing live-backend behavior isn't expected to have moved.
+- **Builder has manually tested and accepted Prompt 4 in full**, including
+  this discovery-hardening pass (shared filter bar on Search and Category,
+  city filter, skeleton loading) — no defects reported. This closes the
+  "author had no browser-automation tooling" gap noted above; Prompt 4 is
+  closed.
+
+### Prompt 5 — In-app chat (2026-07-11)
+
+Built one-to-one realtime chat scoped to a listing (PRD §7.7), on top of
+the Prompt 2 `chat.ts` query layer. The user chose Chat over Orders as the
+next prompt.
+
+**Added**
+- `supabase/migrations/013_fix_messages_mark_read_policy.sql`,
+  `014_conversations_reuse_update_policy.sql`,
+  `015_conversations_last_message_preview.sql` — three RLS/schema fixes
+  found while building this feature; see BUGS.md issues #10 and #11 for
+  the two behavioral bugs (013 and 014 fix real bugs, 015 is a
+  denormalization addition, not a bug fix).
+- `src/pages/chat/ChatInboxPage.tsx` — real page: threads sorted by
+  `last_message_at` (already the query's order), other-party name + avatar,
+  last-message preview (with a "You: " prefix when you sent it last),
+  relative timestamp, unread dot. Skeleton loading, empty state.
+- `src/pages/chat/ChatThreadPage.tsx` — real page: message log, composer,
+  optimistic send, live incoming messages, mark-as-read. See Architectural
+  decisions below for the realtime/optimistic-update design.
+- `src/lib/queries/__tests__/chat.test.ts` — 9 tests: `upsertConversation`
+  (correct table/payload, the exact `onConflict`/`ignoreDuplicates: false`
+  options that make reuse work rather than silently no-op, same id returned
+  across repeat calls, error mapping) and `markMessagesRead` (correct
+  `read_at` timestamp, scoped to the conversation, excludes the reader's
+  own messages, only touches currently-unread rows, error mapping).
+- `src/lib/queries/__tests__/testUtils.ts` — the mock Postgrest query
+  builder extracted out of `listings.test.ts` now that `chat.test.ts` is a
+  second real user of it (see Architectural decisions in the Prompt 4 entry
+  above re: extracting shared pieces once a second call site exists).
+
+**Modified**
+- `src/lib/queries/chat.ts` — added `fetchConversationById` (single thread
+  by id, used by `ChatThreadPage`), `fetchUnreadConversationIds` (backs the
+  inbox's unread dot — one lightweight query, not N+1), extended
+  `subscribeToMessages` with an `onStatusChange` callback (reconnection
+  handling, see below), added `unsubscribeFromMessages`. `fetchConversations`
+  now shares a `CONVERSATION_SELECT` constant with the new
+  `fetchConversationById` instead of duplicating the embed string.
+- `src/types/database.ts` — `conversations` gained `last_message_body` /
+  `last_message_sender_id` (nullable); removed the old speculative
+  `last_message?` field from `ConversationWithParticipants` now that it's
+  real flat columns on the row itself.
+- `src/pages/listings/ProductDetailPage.tsx` — "Message Seller" is no
+  longer a dead `Link` to `/chat/:listingId` (wrong id shape, was always a
+  placeholder) — it now calls `upsertConversation` and navigates to the
+  real `/chat/:conversationId`. If clicked while signed out, it redirects
+  to `/auth/login` with a return path, matching how `ProtectedRoute` already
+  behaves for Buy Now/`/orders` (PRD: actions requiring an account should
+  prompt sign-in for signed-out visitors).
+- `App.tsx` — `/chat` and `/chat/:id` now point at the real pages.
+- `Placeholders.tsx` — removed the placeholder `ChatInboxPage`/`ChatThreadPage`.
+
+**Architectural notes specific to this feature**
+- **Realtime + optimistic send via direct `queryClient.setQueryData`, not
+  `useMutation`.** Consistent with the codebase's established mutation
+  pattern (see Architectural decisions below): the composer appends a
+  locally-built optimistic `MessageWithSender` to the `["messages", id]`
+  query cache, calls `sendMessage`, then reconciles the temp id with the
+  real one (or removes it and shows a toast on failure). The realtime
+  INSERT handler dedupes by message id, so the sender's own message arriving
+  back over the Realtime channel doesn't double-render.
+- **Sender identity for realtime/optimistic messages is resolved
+  client-side, not fetched.** A `postgres_changes` INSERT payload only
+  contains the raw `messages` row, not the joined sender profile. Since a
+  conversation only ever has two participants, `ChatThreadPage` resolves
+  `sender_id` against the already-loaded conversation's `buyer`/`seller`
+  profile objects (kept in a ref to avoid stale closures inside the
+  subscription effect) instead of issuing a per-message fetch.
+- **Reconnection handling**: `subscribeToMessages` now takes an optional
+  status callback. `ChatThreadPage` invalidates `["messages", id]` whenever
+  the channel reports `SUBSCRIBED` — which fires on both the initial
+  connect and any automatic reconnect — because Supabase Realtime is a live
+  feed, not a durable queue: events that occur while disconnected are never
+  redelivered, so a refetch on (re)connect is the only way to close that gap.
+- **Unsubscribe on unmount/thread-change**: the subscription effect depends
+  on `[id, user, queryClient]` only (not `conversation`, which changes
+  independently) and returns `unsubscribeFromMessages(channel)` as its
+  cleanup, so switching threads or navigating away always tears down the
+  previous channel before a new one (if any) is opened.
+- **Accessibility**: the message list is `role="log" aria-live="polite"`
+  with an `aria-label` naming the other participant, so only newly-arriving
+  messages are announced (existing history loads silently, matching how a
+  live region behaves on mount). Each bubble has a visually-hidden "You
+  said" / "{name} said" prefix so an announcement has context. The composer
+  is a plain native `<input>` in a `<form>` with an associated (visually
+  hidden) `<label>` — fully keyboard operable with no custom key handling.
+
+**Deliberately out of scope / unchanged**
+- No typing indicators, read receipts beyond the unread dot, attachments,
+  or message editing/deletion — none are in the PRD §7.7 scope for v1
+  ("Text only").
+- `ChatInboxPage` doesn't add a global unread badge to the `AppShell` nav
+  "Inbox" link — the PRD only asked for the inbox's per-thread unread
+  indicator, not a nav-level badge. `fetchUnreadConversationIds` could
+  support one later without changes.
+
+**Verified**
+- `tsc -b`, `vitest run` (**39/39 pass**: 30 prior + 9 new), `oxlint` (same
+  3 pre-existing warnings), and `npm run build` all clean. Dev server boots
+  and serves without error.
+- **Not verified against the live Supabase project**: migrations 013–015
+  have not been run yet (author has no migration-execution access, only the
+  anon key) — until they are, `conversations.last_message_body`/
+  `last_message_sender_id` don't exist on the live table, and the two RLS
+  fixes aren't live either. Needs the same "run migrations via SQL Editor,
+  then manually click through" cycle as Prompt 3/4: run 013–015 in order,
+  then click Message Seller from a product detail page as one user, send a
+  few messages, and (ideally) check from a second account/browser that
+  incoming messages appear live without a refresh.
 
 ---
 
@@ -298,6 +488,38 @@ conventions established in Prompt 3.
   failed and can retry adding them from the edit page. This mirrors how
   Prompt 3's avatar upload already behaves (`updateProfile` succeeds
   independently of `uploadAvatar`).
+- **URL-state logic is extracted into plain functions, not left inline in
+  components.** `src/lib/listingFilters.ts` has zero React/React Router
+  imports — it only knows about `URLSearchParams` and the `ListingFilters`
+  query shape. The `useListingFilters` hook is a thin adapter on top. This
+  split exists specifically so filter/URL logic can be unit tested without
+  rendering a component tree or mocking the router; reuse this pattern
+  (pure mapping module + thin hook) for any future feature that needs
+  URL-synced state (e.g. a future Orders status filter).
+- **Cross-page UI is extracted into a shared component when two pages
+  need the literal same behavior, not just similar-looking markup.**
+  `ListingBrowser` exists because the PRD explicitly requires Category to
+  reuse Search's filter bar — it's parametrized (`lockedCategory`) rather
+  than duplicated. Don't reach for this pattern preemptively; `ListingCard`
+  (Prompt 4) and `ListingBrowser` (this entry) were both extracted only
+  once a second real call site existed, not in anticipation of one.
+- **Realtime subscriptions always refetch on `SUBSCRIBED`, not just on
+  mount.** `REALTIME_SUBSCRIBE_STATES.SUBSCRIBED` fires on the initial
+  connect *and* on every automatic reconnect after a dropped connection —
+  Supabase Realtime is a live feed with no replay/durability guarantee, so
+  anything that happened while disconnected is silently lost unless the
+  client explicitly refetches when it reconnects. `chat.ts`'s
+  `subscribeToMessages` exposes this via an `onStatusChange` callback;
+  reuse that shape (status callback → `queryClient.invalidateQueries()` on
+  `SUBSCRIBED`) for any future Realtime subscription (e.g. Orders status
+  updates), rather than assuming the initial fetch + live stream is enough.
+- **Realtime payloads only carry the raw table row, never joined data.**
+  A `postgres_changes` event's `payload.new` matches the base table type,
+  not any `select()` embed you use elsewhere for the same table. When the
+  UI needs related data for a live-inserted row (e.g. the sender's profile
+  for a new message), resolve it from data already loaded client-side
+  (`ChatThreadPage` matches `sender_id` against the conversation's already-
+  fetched `buyer`/`seller`) instead of issuing a fetch per realtime event.
 
 ---
 
@@ -306,13 +528,13 @@ conventions established in Prompt 3.
 | PRD § | Feature | Status |
 |---|---|---|
 | 7.1 | User authentication | ✅ Done and verified live (signup, email verification, login, logout, session persistence, password reset, protected routes, profile setup — confirmed against a real Supabase project on 2026-07-04) |
-| 7.2 | Home feed | ✅ Done (Prompt 4) — featured strip, recently added grid, category row, all real data |
-| 7.3 | Categories | ✅ Done (Prompt 4) — real seeded categories, category browse pages |
-| 7.4 | Search and filter | ✅ Done (Prompt 4) — text, category, state, condition, price range, sort; synced to URL query string |
+| 7.2 | Home feed | ✅ Done (Prompt 4) — featured strip, recently added grid, category row, all real data, skeleton loading states |
+| 7.3 | Categories | ✅ Done (Prompt 4) — real seeded categories; category pages reuse the exact same filter bar as Search (`ListingBrowser`, added 2026-07-11) |
+| 7.4 | Search and filter | ✅ Done (Prompt 4, hardened 2026-07-11) — text, category, state, city, condition, price range, sort; fully synced to URL query string; skeleton loading; accessible labels |
 | 7.5 | Product listing (CRUD) | ✅ Done (Prompt 4) — create/edit/delete, 1–6 photo upload, seller-only edit/delete |
 | 7.6 | Product details | ✅ Done (Prompt 4) — gallery, seller card, condition/location/price/description, owner vs buyer actions |
-| 7.7 | In-app chat | ⏳ Placeholder UI only, query layer exists — **candidate next (Prompt 5)** |
-| 7.8 | Orders (mock flow) | ⏳ Placeholder UI only, query layer exists — **candidate next (Prompt 5)** |
+| 7.7 | In-app chat | ✅ Done (Prompt 5, 2026-07-11) — realtime, scoped to a listing, create-or-reuse, optimistic send, unread tracking. **Not yet run against the live project** (migrations 013–015 pending) |
+| 7.8 | Orders (mock flow) | ⏳ Placeholder UI only, query layer exists — **candidate next** |
 | 7.9 | Order tracking | ⏳ Placeholder UI only |
 | 7.10 | Seller dashboard | ⏳ Placeholder UI only — "My Listings"/"My Orders" tabs still not wired even though `fetchListingsBySeller` exists |
 | 7.11 | User profile | ✅ Own profile done and verified live (Prompt 3); public profile view (`/profile/:id`) still placeholder, does not yet show the seller's real listings |
@@ -327,10 +549,11 @@ same pattern Prompt 3 (auth) and Prompt 4 (listings) applied.
 ## Database migrations
 
 Run in order; 001–011 predate this doc, 012 was added in Prompt 3. Prompt 4
-added no new migrations — Listings uses only tables/buckets that already
-existed (`listings`, `listing_images`, `categories`, `listing-images` bucket).
-**Status: all 12 have been run successfully against the live Supabase
-project as of 2026-07-04.**
+added no new migrations. Prompt 5 (Chat) added three (013–015).
+**Status: 001–012 have been run successfully against the live Supabase
+project as of 2026-07-04. 013–015 have NOT been run yet** — author has no
+migration-execution access in this environment (anon key only); these need
+to go through the SQL Editor like every migration before them.
 
 | # | File | Purpose |
 |---|---|---|
@@ -345,7 +568,10 @@ project as of 2026-07-04.**
 | 009 | `009_order_events.sql` | order_events table + RLS |
 | 010 | `010_reviews.sql` | reviews table + RLS + rating trigger |
 | 011 | `011_storage.sql` | `listing-images` bucket + RLS |
-| **012** | **`012_avatar_storage.sql`** | **`avatars` bucket + RLS (owner-scoped by `{user_id}/...` path)** |
+| 012 | `012_avatar_storage.sql` | `avatars` bucket + RLS (owner-scoped by `{user_id}/...` path) |
+| **013** | **`013_fix_messages_mark_read_policy.sql`** | **Fixes a tautological RLS check that let a participant rewrite a message's `sender_id` while marking it read (BUGS.md #10)** |
+| **014** | **`014_conversations_reuse_update_policy.sql`** | **Adds the missing UPDATE policy `upsertConversation`'s reuse path needs — without it, opening the same thread twice was rejected by RLS (BUGS.md #11)** |
+| **015** | **`015_conversations_last_message_preview.sql`** | **Denormalizes `last_message_body`/`last_message_sender_id` onto `conversations` for the inbox preview, no bug** |
 
 No seed script exists yet (PRD §9 calls for one) — still outstanding.
 
@@ -370,19 +596,27 @@ No seed script exists yet (PRD §9 calls for one) — still outstanding.
   migrations" section below. If auth signups happened before migrations
   were run, existing accounts also need the one-time `profiles` backfill
   query documented in the 2026-07-04 log entry above.
+- **Chat (Prompt 5) is implementation-complete but migrations 013–015 have
+  not been run against the live project yet** — run them via the SQL
+  Editor, in order, before testing Chat at all. Until then, Message
+  Seller/the inbox/the thread page will error (missing columns and/or RLS
+  rejections on the second `upsertConversation` call). Once migrations run,
+  needs the same kind of manual click-through Prompt 3/4 got: open a
+  listing as a buyer, click Message Seller, send a message, confirm it
+  appears live in a second browser/account for the seller, and confirm the
+  unread dot clears when a thread is opened.
 - No Playwright e2e suite yet, despite being named in the PRD tech stack.
-  This also means Prompt 4's listing flows were verified via build/tests
-  plus a live anonymous-client data-layer smoke script (see 2026-07-10 log
-  entry), not an actual browser click-through — no browser automation tool
-  is available in this environment. **Needs a manual authenticated
-  click-through before Prompt 4 is considered fully closed**: create a
-  listing with 1–6 photos, confirm it appears on Home/Search/Category,
-  open its detail page, edit it (including removing a photo and adding a
-  new one), then delete it and confirm it disappears from listings.
-- No seed data script yet (PRD §9). As of 2026-07-10 the live project has
-  0 listings (confirmed via the anonymous smoke test) — Home/Search/Category
-  will show their empty states until either the manual click-through above
-  or a seed script adds data.
+  Claude's own verification of Prompt 4 stopped at build/tests/lint plus a
+  live anonymous-client data-layer smoke script — no browser automation
+  tool is available in this environment. **Resolved 2026-07-11**: Builder
+  manually clicked through the authenticated flows (create/edit/delete a
+  listing with photos, browse and filter via Home/Search/Category) against
+  the live project and accepted Prompt 4 — no defects reported. The
+  Playwright-suite gap itself remains open for future prompts; each new
+  feature will need the same kind of manual acceptance pass until it exists.
+- No seed data script yet (PRD §9). The live project had 0 listings as of
+  2026-07-10 (confirmed via the anonymous smoke test); Builder's manual
+  testing since then will have added at least one real listing.
 - `SellerDashboardPage` ("My Listings" tab) is not wired to real data yet —
   a seller currently has no in-app list of their own listings; they can only
   reach an existing listing via its Product Detail page or a direct
@@ -404,18 +638,18 @@ app falls back to a placeholder Supabase URL and all backend calls fail.
 
 ## Next task
 
-**Immediate: close out Prompt 4.** Run the manual authenticated
-click-through described in "Known assumptions" above against the live
-project and report back — this implementation is not considered done until
-that passes (per this session's instructions).
+**Prompt 4 is closed** (Listings CRUD from 2026-07-10 + Discovery hardening
+from 2026-07-11, both manually tested and accepted by Builder against the
+live project).
 
-**After that: Prompt 5 — In-app chat (PRD §7.7) or Orders (PRD §7.8).**
-Both have a complete query layer already (`src/lib/queries/chat.ts` /
-`orders.ts`) and only placeholder UI in `Placeholders.tsx`
-(`ChatInboxPage`, `ChatThreadPage`, `OrdersPage`). PRD ordering and the
-Product Detail page's existing "Message Seller" button (already linking to
-`/chat/:id`, currently a placeholder thread) both point at Chat as the more
-natural next step, but this hasn't been confirmed with the user — ask
-before starting either. `SellerDashboardPage` wiring (My Listings tab) is
-a smaller, related follow-up worth bundling into whichever prompt comes
-next, since `fetchListingsBySeller` is already sitting unused.
+**Prompt 5 (Chat) is implementation-complete but not yet verified live** —
+run migrations 013–015 via the SQL Editor, then do the manual click-through
+described in "Known assumptions" above, before considering it closed.
+
+**After that: Orders (PRD §7.8), then Order tracking (§7.9), then Seller
+dashboard (§7.10, including finally wiring `fetchListingsBySeller` into
+the "My Listings" tab — noted as a gap since Prompt 4), then Ratings and
+reviews (§7.12).** Orders has a complete query layer already
+(`src/lib/queries/orders.ts`) and only placeholder UI
+(`OrdersPage`/`SellerDashboardPage` in `Placeholders.tsx`). Confirm with
+the user before starting, per this session's established pattern.

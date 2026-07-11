@@ -4,10 +4,14 @@ import { useQuery } from "@tanstack/react-query"
 import { ChevronRight, ShoppingBag } from "lucide-react"
 import { Button } from "../components/ui/Button"
 import { Card } from "../components/ui/Card"
-import { Spinner } from "../components/ui/Spinner"
+import { Skeleton } from "../components/ui/Skeleton"
 import { EmptyState } from "../components/ui/EmptyState"
 import { ListingCard } from "../components/listings/ListingCard"
+import { ListingCardSkeleton } from "../components/listings/ListingCardSkeleton"
 import { fetchCategories, fetchFeaturedListings, fetchRecentListings } from "../lib/queries"
+
+const CATEGORY_SKELETON_COUNT = 9
+const RECENT_SKELETON_COUNT = 6
 
 export const HomePage: React.FC = () => {
   const categoriesQuery = useQuery({
@@ -55,8 +59,15 @@ export const HomePage: React.FC = () => {
           <h2 className="text-2xl font-bold text-serif text-text">Browse Categories</h2>
         </div>
         {categoriesQuery.isLoading ? (
-          <div className="flex justify-center py-8">
-            <Spinner />
+          <div
+            role="status"
+            aria-live="polite"
+            className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4"
+          >
+            <span className="sr-only">Loading categories…</span>
+            {Array.from({ length: CATEGORY_SKELETON_COUNT }).map((_, index) => (
+              <Skeleton key={index} className="h-[68px] rounded-card" aria-hidden="true" />
+            ))}
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
@@ -97,8 +108,15 @@ export const HomePage: React.FC = () => {
           </Link>
         </div>
         {recentQuery.isLoading ? (
-          <div className="flex justify-center py-12">
-            <Spinner size="lg" />
+          <div
+            role="status"
+            aria-live="polite"
+            className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6"
+          >
+            <span className="sr-only">Loading recently added listings…</span>
+            {Array.from({ length: RECENT_SKELETON_COUNT }).map((_, index) => (
+              <ListingCardSkeleton key={index} />
+            ))}
           </div>
         ) : recent.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">

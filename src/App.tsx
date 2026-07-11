@@ -14,9 +14,9 @@ import { SearchPage } from "./pages/SearchPage"
 import { CategoryPage } from "./pages/CategoryPage"
 import { ProductDetailPage } from "./pages/listings/ProductDetailPage"
 import { ListingFormPage } from "./pages/listings/ListingFormPage"
+import { ChatInboxPage } from "./pages/chat/ChatInboxPage"
+import { ChatThreadPage } from "./pages/chat/ChatThreadPage"
 import {
-  ChatInboxPage,
-  ChatThreadPage,
   OrdersPage,
   SellerDashboardPage,
   PublicProfilePage,

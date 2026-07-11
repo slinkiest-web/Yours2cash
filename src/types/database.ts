@@ -170,6 +170,8 @@ export interface Database {
           seller_id: string
           created_at: string
           last_message_at: string
+          last_message_body: string | null
+          last_message_sender_id: string | null
         }
         Insert: {
           id?: string
@@ -178,6 +180,8 @@ export interface Database {
           seller_id: string
           created_at?: string
           last_message_at?: string
+          last_message_body?: string | null
+          last_message_sender_id?: string | null
         }
         Update: {
           id?: string
@@ -186,6 +190,8 @@ export interface Database {
           seller_id?: string
           created_at?: string
           last_message_at?: string
+          last_message_body?: string | null
+          last_message_sender_id?: string | null
         }
         Relationships: [
           {
@@ -420,7 +426,6 @@ export type ConversationWithParticipants = Conversation & {
   buyer: Profile
   seller: Profile
   listing: Pick<Listing, "id" | "title" | "price">
-  last_message?: Pick<Message, "body" | "created_at" | "sender_id">
 }
 
 export type MessageWithSender = Message & {
